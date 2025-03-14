@@ -58,7 +58,7 @@ build_amd64:
       && cd .. \
       && rm -rf addons-new
     - export BUILD_DATE=$(date +%Y-%m-%d)
-    - docker buildx build --platform linux/amd64 -t ${CONTAINER_IMAGE}:${BUILD_DATE} -t ${CONTAINER_IMAGE}:latest --push .
+    - docker buildx build --build-arg ODOO_VERSION=${ODOO_VERSION} --platform linux/amd64 -t ${CONTAINER_IMAGE}:${BUILD_DATE} -t ${CONTAINER_IMAGE}:latest --push .
 
 after_script:
   - docker system prune -af --volumes

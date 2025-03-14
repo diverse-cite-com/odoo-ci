@@ -1,4 +1,5 @@
-FROM docker.bemade.org/bemade/odoo17.0e
+ARG ODOO_VERSION=18.0e
+FROM docker.bemade.org/bemade/odoo${ODOO_VERSION}e
 
 USER 0
 COPY --chown=odoo:odoo ./addons /mnt/extra-addons
