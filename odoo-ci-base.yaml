@@ -46,7 +46,7 @@ build_amd64:
     # Get the submodules for extra-addons
     - git submodule update --init --recursive --recommend-shallow
     # Get the standard dockerfile
-    - git clone -b ${ODOO_VERSION} git@git.bemade.org:bemade/odoo-ci.git
+    - git clone git@git.bemade.org:bemade/odoo-ci.git
     - ln -sf odoo-ci/Dockerfile
     # Convert symlinks in ./addons to full folders
     - |
