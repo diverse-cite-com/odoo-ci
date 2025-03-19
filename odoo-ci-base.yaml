@@ -65,8 +65,7 @@ build_amd64:
     - |
       cd "$home" && \
       if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
-        mv -f ./* ../addons/ \
-          && cd .. \
+        mv -f ./addons-new/* /addons/ \
           && rm -rf addons-new
       fi
     - export BUILD_DATE=$(date +%Y-%m-%d)
