@@ -54,10 +54,13 @@ build_amd64:
         mkdir -p ./addons-new \
         && cd ./addons-new \
         && find ../addons -type l \
-          -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \; \
-        && mv -f ./* ../addons/ \
-        && cd .. \
-        && rm -rf addons-new
+          -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
+      fi
+    - |
+      if [ "$(ls -A .)" ]; then
+        mv -f ./* ../addons/ \
+          && cd .. \
+          && rm -rf addons-new
       fi
     - export BUILD_DATE=$(date +%Y-%m-%d)
     - docker buildx build --build-arg ODOO_VERSION=${ODOO_VERSION} --platform linux/amd64 -t ${CONTAINER_IMAGE}:${BUILD_DATE} -t ${CONTAINER_IMAGE}:latest --push .
