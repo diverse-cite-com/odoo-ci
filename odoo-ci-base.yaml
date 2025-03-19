@@ -23,7 +23,7 @@ before_script:
     Host github.com
       StrictHostKeyChecking no
       UserKnownHostsFile=/dev/null
-    
+
     Host git.bemade.org
       StrictHostKeyChecking no
       UserKnownHostsFile=/dev/null
@@ -50,13 +50,15 @@ build_amd64:
     - cp odoo-ci/Dockerfile .
     # Convert symlinks in ./addons to full folders
     - |
-      mkdir -p ./addons-new \
-      && cd ./addons-new \
-      && find ../addons -type l \
-        -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \; \
-      && mv -f ./* ../addons/ \
-      && cd .. \
-      && rm -rf addons-new
+      if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
+        mkdir -p ./addons-new \
+        && cd ./addons-new \
+        && find ../addons -type l \
+          -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \; \
+        && mv -f ./* ../addons/ \
+        && cd .. \
+        && rm -rf addons-new \
+      fi
     - export BUILD_DATE=$(date +%Y-%m-%d)
     - docker buildx build --build-arg ODOO_VERSION=${ODOO_VERSION} --platform linux/amd64 -t ${CONTAINER_IMAGE}:${BUILD_DATE} -t ${CONTAINER_IMAGE}:latest --push .
 
