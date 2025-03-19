@@ -5,7 +5,7 @@ services:
 
 variables:
   DOCKER_DRIVER: overlay2
-  CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/odoo${ODOO_VERSION}e-${CI_PROJECT_NAMESPACE}
+  CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/odoo${ODOO_VERSION}e-${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}
 
 stages:
   - build
