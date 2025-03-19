@@ -47,7 +47,12 @@ build_amd64:
     - git submodule update --init --recursive --recommend-shallow
     # Get the standard dockerfile
     - git clone git@git.bemade.org:bemade/odoo-ci.git
-    - cp odoo-ci/Dockerfile .
+    - |
+      if [[ $COMMUNITY ]]; then
+        dockerfile="odoo-ci/Dockerfile"
+      else
+        dockerfile="odoo-ci/Dockerfile-community"
+      fi
     # Convert symlinks in ./addons to full folders
     - home="$(pwd)"
     - |
@@ -65,7 +70,7 @@ build_amd64:
           && rm -rf addons-new
       fi
     - export BUILD_DATE=$(date +%Y-%m-%d)
-    - docker buildx build --build-arg ODOO_VERSION=${ODOO_VERSION} --platform linux/amd64 -t ${CONTAINER_IMAGE}:${BUILD_DATE} -t ${CONTAINER_IMAGE}:latest --push .
+    - docker buildx build -f "$dockerfile" --build-arg ODOO_VERSION=${ODOO_VERSION} --platform linux/amd64 -t ${CONTAINER_IMAGE}:${BUILD_DATE} -t ${CONTAINER_IMAGE}:latest --push .
 
 after_script:
   - docker system prune -af --volumes
