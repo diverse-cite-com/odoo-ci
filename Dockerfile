@@ -1,4 +1,4 @@
-ARG ODOO_VERSION=18.0e
+ARG ODOO_VERSION=18.0
 FROM docker.bemade.org/bemade/odoo${ODOO_VERSION}e
 
 USER 0
