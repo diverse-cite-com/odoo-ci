@@ -49,9 +49,9 @@ build_amd64:
     - git clone git@git.bemade.org:bemade/odoo-ci.git
     - |
       if [[ $COMMUNITY ]]; then
-        dockerfile="odoo-ci/Dockerfile"
-      else
         dockerfile="odoo-ci/Dockerfile-community"
+      else
+        dockerfile="odoo-ci/Dockerfile"
       fi
     # Convert symlinks in ./addons to full folders
     - home="$(pwd)"
