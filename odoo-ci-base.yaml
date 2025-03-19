@@ -49,6 +49,7 @@ build_amd64:
     - git clone git@git.bemade.org:bemade/odoo-ci.git
     - cp odoo-ci/Dockerfile .
     # Convert symlinks in ./addons to full folders
+    - home="$(pwd)"
     - |
       if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
         mkdir -p ./addons-new \
@@ -57,7 +58,8 @@ build_amd64:
           -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
       fi
     - |
-      if [ "$(ls -A .)" ]; then
+      cd "$home" && \
+      if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
         mv -f ./* ../addons/ \
           && cd .. \
           && rm -rf addons-new
