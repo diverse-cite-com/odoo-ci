@@ -6,7 +6,7 @@ services:
 
 variables:
   # Use non-TLS connection since containers are in the same pod
-  DOCKER_HOST: tcp://docker:2375
+  DOCKER_HOST: tcp://localhost:2375
   DOCKER_TLS_CERTDIR: ""  # Disable TLS
   DOCKER_DRIVER: overlay2
   CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
