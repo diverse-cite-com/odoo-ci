@@ -1,0 +1,104 @@
+variables:
+  CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
+
+stages:
+  - build
+
+build:
+  stage: build
+  tags: [kubernetes]
+  image: docker:20.10.16
+  services:
+    - name: docker:20.10.16-dind
+      alias: docker
+  variables:
+    # Tell docker CLI to use the docker daemon started by the service
+    DOCKER_HOST: tcp://docker:2376
+    # Use TLS settings for secure communication with the daemon
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_TLS_VERIFY: 1
+    DOCKER_CERT_PATH: "/certs/client"
+    # Pass registry credentials to Docker
+    DOCKER_AUTH_CONFIG: '{"auths":{"${HARBOR_URL}":{"username":"${HARBOR_USERNAME}","password":"${HARBOR_PASSWORD}"}}}'
+  script:
+    - |
+      # Install git and ssh
+      apk add --no-cache git openssh-client bash shadow
+      
+      # Create a non-root user for better security
+      addgroup -g 1000 builder
+      adduser -D -u 1000 -G builder builder
+      mkdir -p /home/builder
+      chown -R builder:builder /home/builder
+      
+      # Set up SSH for GitHub access
+      mkdir -p ~/.ssh
+      chmod 700 ~/.ssh
+
+      # Configure SSH to not verify host keys
+      cat > ~/.ssh/config << EOF
+      Host github.com
+        StrictHostKeyChecking no
+        UserKnownHostsFile=/dev/null
+
+      Host git.bemade.org
+        StrictHostKeyChecking no
+        UserKnownHostsFile=/dev/null
+      EOF
+      chmod 600 ~/.ssh/config
+
+      # Add the SSH key
+      echo "${SSH_PRIVATE_KEY}" > ~/.ssh/github_key
+      chmod 600 ~/.ssh/github_key
+      eval $(ssh-agent -s)
+      ssh-add ~/.ssh/github_key
+
+      # Clone submodules
+      git submodule update --init --recursive --recommend-shallow
+
+      # Get the standard dockerfile
+      git clone git@git.bemade.org:bemade/odoo-ci.git
+      
+      # Determine which dockerfile to use
+      if [[ $COMMUNITY ]]; then
+        dockerfile="odoo-ci/Dockerfile-community"
+      else
+        dockerfile="odoo-ci/Dockerfile"
+      fi
+
+      # Prepare the build context
+      if [ -f ".odoo-deploy/odoo-ci/prepare-build.sh" ]; then
+        bash .odoo-deploy/odoo-ci/prepare-build.sh
+      fi
+
+      # Convert symlinks in ./addons to full folders
+      home="$(pwd)"
+      if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
+        mkdir -p ./addons-new \
+        && cd ./addons-new \
+        && find ../addons -type l \
+          -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
+      fi
+
+      cd "$home"
+      if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
+        mv -f ./addons-new/* ./addons/ \
+          && rm -rf addons-new
+      fi
+
+      # Set build date
+      BUILD_DATE=$(date +%Y-%m-%d)
+      
+      # Login to Docker registry
+      echo "${HARBOR_PASSWORD}" | docker login ${HARBOR_URL} -u "${HARBOR_USERNAME}" --password-stdin
+      
+      # Build and push the Docker image
+      docker build \
+        -f "${dockerfile}" \
+        --build-arg ODOO_VERSION=${ODOO_VERSION} \
+        -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
+        -t "${CONTAINER_IMAGE}:latest" \
+        .
+      
+      docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
+      docker push "${CONTAINER_IMAGE}:latest"

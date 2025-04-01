@@ -1,0 +1,133 @@
+affinity: {}
+checkInterval: 3
+concurrent: 10
+configMaps: {}
+deploymentAnnotations: {}
+deploymentLabels: {}
+deploymentLifecycle: {}
+extraContainers: []
+extraEnv: {}
+extraEnvFrom: {}
+extraObjects: []
+hostAliases: []
+image:
+  image: gitlab-org/gitlab-runner
+  registry: registry.gitlab.com
+imagePullPolicy: IfNotPresent
+livenessProbe: {}
+metrics:
+  enabled: false
+  port: 9252
+  portName: metrics
+  serviceMonitor:
+    enabled: false
+nodeSelector: {}
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  fsGroup: 65533
+  runAsUser: 100
+priorityClassName: ''
+rbac:
+  clusterWideAccess: true
+  create: true
+  generatedServiceAccountName: ''
+  imagePullSecrets: []
+  podSecurityPolicy:
+    enabled: true
+    resourceNames:
+      - gitlab-runner
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "pods/exec", "pods/attach", "secrets", "configmaps"]
+      verbs: ["get", "list", "watch", "create", "patch", "delete"]
+    - apiGroups: [""]
+      resources: ["nodes"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: [""]
+      resources: ["services"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: [""]
+      resources: ["persistentvolumeclaims"]
+      verbs: ["get", "list", "watch", "create", "delete"]
+    - apiGroups: ["policy"]
+      resources: ["podsecuritypolicies"]
+      verbs: ["use"]
+      resourceNames: ["gitlab-runner"]
+  serviceAccountAnnotations: {}
+readinessProbe: {}
+resources: {}
+runners:
+  cache: {}
+  config: |
+    [[runners]]
+      [runners.kubernetes]
+        namespace = "{{.Release.Namespace}}"
+        image = "alpine"
+        privileged = true
+        allowed_pull_policies = ["always", "if-not-present", "never"]
+        allowed_services = ["docker:*"]
+        allowed_images = ["*"]
+        poll_timeout = 600
+        poll_interval = 5
+        service_account_overwrite_allowed = true
+        [runners.kubernetes.pod_annotations]
+          "cluster-autoscaler.kubernetes.io/safe-to-evict" = "true"
+        [runners.kubernetes.service_account]
+        [runners.kubernetes.volumes]
+          [[runners.kubernetes.volumes.host_path]]
+            name = "docker-certs"
+            mount_path = "/certs"
+            host_path = "/certs"
+          [[runners.kubernetes.volumes.host_path]]
+            name = "docker-socket"
+            mount_path = "/var/run/docker.sock"
+            host_path = "/var/run/docker.sock"
+          [[runners.kubernetes.volumes.empty_dir]]
+            name = "docker-builds"
+            mount_path = "/builds"
+          [[runners.kubernetes.volumes.empty_dir]]
+            name = "docker-cache"
+            mount_path = "/cache"
+  configPath: ''  
+runtimeClassName: ''
+secrets: []
+securityContext:
+  allowPrivilegeEscalation: true
+  capabilities:
+    drop:
+      - ALL
+  privileged: true
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+service:
+  enabled: false
+  type: ClusterIP
+serviceAccount:
+  annotations: {}
+  imagePullSecrets:
+    - name: docker.bemade.org
+  name: 'gitlab-runner'
+sessionServer:
+  enabled: false
+  ingress:
+    annotations: {}
+    className: ''
+    enabled: false
+    tls:
+      - secretName: gitlab-runner-session-server
+  serviceType: LoadBalancer
+shutdown_timeout: 0
+strategy: {}
+terminationGracePeriodSeconds: 3600
+tolerations: []
+topologySpreadConstraints: {}
+unregisterRunners: true
+useTini: false
+volumeMounts: []
+volumes: []
+gitlabUrl: https://git.bemade.org
+global:
+  cattle:
+    systemProjectId: p-b4p8r
+runnerToken: glrt-j37E2twpnNP3ws_ATHCi
