@@ -1,0 +1,36 @@
+FROM alpine:3.16
+
+# Install required packages
+RUN apk add --no-cache \
+    bash \
+    curl \
+    git \
+    openssh-client \
+    ca-certificates \
+    tee \
+    findutils \
+    coreutils
+
+# Create directory for kaniko
+RUN mkdir -p /kaniko/.ssh /kaniko/ssl && \
+    chmod 700 /kaniko/.ssh
+
+# Download and install kaniko executor
+RUN curl -Lo /usr/local/bin/executor https://github.com/GoogleContainerTools/kaniko/releases/download/v1.9.1/executor-linux-amd64 && \
+    chmod +x /usr/local/bin/executor
+
+# Set up environment variables
+ENV HOME=/kaniko
+ENV PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV SSL_CERT_DIR=/kaniko/ssl
+ENV DOCKER_CONFIG=/kaniko/.docker
+ENV GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+
+# Create a wrapper script for kaniko executor
+RUN echo '#!/bin/sh\n/usr/local/bin/executor "$@"' > /kaniko/executor && \
+    chmod +x /kaniko/executor
+
+WORKDIR /workspace
+
+# Set the entrypoint to be a shell by default
+ENTRYPOINT ["/bin/sh", "-c"]
