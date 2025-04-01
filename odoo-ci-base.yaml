@@ -8,8 +8,21 @@ stages:
   - prepare
   - build
 
+# Define a template with the shared volume configuration
+.with_shared_volume:
+  tags:
+    - kubernetes
+  kubernetes:
+    volumes:
+      - name: workspace-volume
+        emptyDir: {}
+    volume_mounts:
+      - name: workspace-volume
+        mount_path: /workspace
+
 prepare:
   stage: prepare
+  extends: .with_shared_volume
   script:
     - apk add --no-cache git openssh-client findutils tar
     # Set up SSH for GitHub access
@@ -66,6 +79,7 @@ prepare:
 
 build_amd64:
   stage: build
+  extends: .with_shared_volume
   needs:
     - prepare
   image:
@@ -77,8 +91,6 @@ build_amd64:
     - echo "{\"auths\":{\"$HARBOR_URL\":{\"username\":\"$HARBOR_USERNAME\",\"password\":\"$HARBOR_PASSWORD\"}}}" > /kaniko/.docker/config.json
     # Set the build date
     - export BUILD_DATE=$(date +%Y-%m-%d)
-    # Debug
-    - ls /workspace
     # Build and push the image
     - /kaniko/executor
       --context=/workspace
