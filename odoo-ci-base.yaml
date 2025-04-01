@@ -32,18 +32,10 @@ prepare:
     # Configure Git to use the SSH key
     - eval $(ssh-agent)
     - ssh-add ~/.ssh/id_rsa
-    
     # Get the submodules for extra-addons
     - git submodule update --init --recursive --recommend-shallow
     # Get the standard dockerfile
     - git clone git@git.bemade.org:bemade/odoo-ci.git
-    - |
-      if [[ $COMMUNITY ]]; then
-        dockerfile="odoo-ci/Dockerfile-community"
-      else
-        dockerfile="odoo-ci/Dockerfile"
-      fi
-    
     # Convert symlinks in ./addons to full folders
     - home="$(pwd)"
     - |
@@ -59,26 +51,22 @@ prepare:
         mv -f ./addons-new/* ./addons/ \
           && rm -rf addons-new
       fi
-    
+    # Set up the dockerfile path for enterprise/community
+    - |
+      if [[ $COMMUNITY ]]; then
+        dockerfile="odoo-ci/Dockerfile-community"
+      else
+        dockerfile="odoo-ci/Dockerfile"
+      fi
     # Create a minimal build context with only what's needed
-    - mkdir -p build-context
-    - cp -r addons build-context/
-    - cp requirements.txt build-context/ || echo "No requirements.txt found"
-    - cp "$dockerfile" build-context/Dockerfile
-    
-    # Create a tar of the minimal context
-    - cd build-context
-    - tar -czf ../build-context.tar.gz .
-    - cd ..
-    
-  artifacts:
-    paths:
-      - build-context.tar.gz
-      - "$dockerfile"  # Save the dockerfile path for the next stage
+    - mkdir -p /workspace
+    - cp -r addons /workspace/
+    - cp requirements.txt /workspace/ || echo "No requirements.txt found"
+    - cp "$dockerfile" /workspace/Dockerfile
 
 build_amd64:
   stage: build
-  needs: 
+  needs:
     - prepare
   image:
     name: gcr.io/kaniko-project/executor:debug
@@ -87,18 +75,12 @@ build_amd64:
     # Configure Docker registry credentials
     - mkdir -p /kaniko/.docker
     - echo "{\"auths\":{\"$HARBOR_URL\":{\"username\":\"$HARBOR_USERNAME\",\"password\":\"$HARBOR_PASSWORD\"}}}" > /kaniko/.docker/config.json
-    
-    # Extract the minimal build context
-    - mkdir -p /workspace
-    - tar -xzf build-context.tar.gz -C /workspace
-    
     # Set the build date
     - export BUILD_DATE=$(date +%Y-%m-%d)
-    
     # Build and push the image
-    - /kaniko/executor 
+    - /kaniko/executor
       --context=/workspace
-      --dockerfile=/workspace/Dockerfile 
+      --dockerfile=/workspace/Dockerfile
       --build-arg ODOO_VERSION=${ODOO_VERSION}
       --destination ${CONTAINER_IMAGE}:${BUILD_DATE}
       --destination ${CONTAINER_IMAGE}:latest
