@@ -1,5 +1,5 @@
 variables:
-  CUSTOM_KANIKO_IMAGE: ${HARBOR_HOST}/bemade/kaniko-alpine:latest
+  CUSTOM_KANIKO_IMAGE: ${HARBOR_HOST}/bemade/kaniko-ubuntu:latest
   CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
 
 stages:

@@ -1,7 +1,10 @@
-FROM alpine:3.16
+FROM ubuntu:20.04
+
+# Avoid prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Install required packages
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y \
     bash \
     curl \
     git \
@@ -9,7 +12,8 @@ RUN apk add --no-cache \
     ca-certificates \
     coreutils \
     findutils \
-    util-linux
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create directory for kaniko
 RUN mkdir -p /kaniko/.ssh /kaniko/ssl && \
@@ -33,4 +37,4 @@ RUN echo '#!/bin/sh\n/usr/local/bin/executor "$@"' > /kaniko/executor && \
 WORKDIR /workspace
 
 # Set the entrypoint to be a shell by default
-ENTRYPOINT ["/bin/sh", "-c"]
+ENTRYPOINT ["/bin/bash", "-c"]
