@@ -68,6 +68,8 @@ build_amd64:
   stage: build
   needs:
     - prepare
+  variables:
+    GIT_STRATEGY: none # Don't do a fresh checkout
   image:
     name: gcr.io/kaniko-project/executor:debug
     entrypoint: [""]
