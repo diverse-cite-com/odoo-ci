@@ -72,8 +72,7 @@ runners:
         poll_interval = 5
         service_account_overwrite_allowed = true
         [runners.kubernetes.pod_annotations]
-          "cluster-autoscaler.kubernetes.io/safe-to-evict" = "true"
-        [runners.kubernetes.service_account]
+          cluster-autoscaler.kubernetes.io/safe-to-evict = true
         [runners.kubernetes.volumes]
           [[runners.kubernetes.volumes.host_path]]
             name = "docker-certs"
