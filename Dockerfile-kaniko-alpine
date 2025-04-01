@@ -27,7 +27,8 @@ ENV DOCKER_CONFIG=/kaniko/.docker
 ENV GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
 
 # Create a wrapper script for kaniko executor
-RUN echo '#!/bin/sh\n/usr/local/bin/executor "$@"' > /kaniko/executor && \
+RUN echo '#!/bin/sh' > /kaniko/executor && \
+    echo '/usr/local/bin/executor "$@"' >> /kaniko/executor && \
     chmod +x /kaniko/executor
 
 WORKDIR /workspace
