@@ -1,5 +1,5 @@
 variables:
-  CUSTOM_KANIKO_IMAGE: ${HARBOR_HOST}/bemade/kaniko-ssh:latest
+  CUSTOM_KANIKO_IMAGE: ${HARBOR_HOST}/bemade/kaniko-alpine:latest
   CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
 
 stages:
@@ -11,6 +11,7 @@ build:
   image:
     name: ${CUSTOM_KANIKO_IMAGE}
     entrypoint: ["/bin/sh", "-c"]
+    pull_policy: always
   variables:
     # Pass CI registry credentials to Kaniko
     DOCKER_AUTH_CONFIG: '{"auths":{"${HARBOR_URL}":{"username":"${HARBOR_USERNAME}","password":"${HARBOR_PASSWORD}"}}}'
