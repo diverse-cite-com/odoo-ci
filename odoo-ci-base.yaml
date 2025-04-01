@@ -1,25 +1,21 @@
-image: moby/buildkit:rootless
+image:
+  name: alpine:latest
 
 variables:
-  DOCKER_DRIVER: overlay2
   CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
-  BUILDKIT_PROGRESS: plain
-  # Enable BuildKit features
-  DOCKER_BUILDKIT: 1
-  BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
 
 stages:
+  - prepare
   - build
 
-build:
-  stage: build
-  before_script:
+prepare:
+  stage: prepare
+  script:
+    - apk add --no-cache git openssh-client findutils tar
     # Set up SSH for GitHub access
-    - apk add --no-cache openssh-client git bash
-    - eval $(ssh-agent -s)
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
-    # Configure SSH to not verify host keys
+    # Configure SSH
     - |
       cat > ~/.ssh/config << EOF
       Host github.com
