@@ -31,35 +31,60 @@ build:
       EOF
     - chmod 600 ~/.ssh/config
     # Add the SSH key
-    - cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
-    - chmod 600 ~/.ssh/github_key
-    - ssh-add ~/.ssh/github_key
-    # Login to Docker registry
-    - mkdir -p ~/.docker
-    - echo '{"auths":{"'"$HARBOR_URL"'":{"username":"'"$HARBOR_USERNAME"'","password":"'"$HARBOR_PASSWORD"'"}}}' > ~/.docker/config.json
-    # Clean up submodules directory if needed
-    - rm -rf ./.repos/* 2>/dev/null || true
-    # Update submodules
-    - git submodule update --init --recursive
+    - cp "$SSH_KEY_GITHUB" ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+    # Configure Git to use the SSH key
+    - eval $(ssh-agent)
+    - ssh-add ~/.ssh/id_rsa
+    # Get the submodules for extra-addons
+    - git submodule update --init --recursive --recommend-shallow
     # Get the standard dockerfile
     - git clone git@git.bemade.org:bemade/odoo-ci.git
+    # Convert symlinks in ./addons to full folders
+    - home="$(pwd)"
+    - |
+      if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
+        mkdir -p ./addons-new \
+        && cd ./addons-new \
+        && find ../addons -type l \
+          -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
+      fi
+    - |
+      cd "$home" && \
+      if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
+        mv -f ./addons-new/* ./addons/ \
+          && rm -rf addons-new
+      fi
+    # Set up the dockerfile path for enterprise/community
     - |
       if [[ $COMMUNITY ]]; then
         dockerfile="odoo-ci/Dockerfile-community"
       else
         dockerfile="odoo-ci/Dockerfile"
       fi
+    # Create a minimal build context with only what's needed
+    - mkdir -p /workspace
+    - cp -r addons /workspace/
+    - cp requirements.txt /workspace/ || echo "No requirements.txt found"
+    - cp "$dockerfile" /workspace/Dockerfile
+
+build_amd64:
+  stage: build
+  needs:
+    - prepare
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
   script:
-    - buildkitd ${BUILDKITD_FLAGS} --addr unix:///run/buildkit/buildkitd.sock &
-    - sleep 5  # Give buildkitd time to start
+    # Configure Docker registry credentials
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$HARBOR_URL\":{\"username\":\"$HARBOR_USERNAME\",\"password\":\"$HARBOR_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    # Set the build date
     - export BUILD_DATE=$(date +%Y-%m-%d)
-    # Use buildctl directly for more control
-    - |
-      buildctl build --frontend=dockerfile.v0 \
-      --local context=. \
-      --local dockerfile=. \
-      --opt build-arg:ODOO_VERSION=${ODOO_VERSION} \
-      --opt filename=$dockerfile \
-      --ssh default \
-      --output type=image,name=${CONTAINER_IMAGE}:${BUILD_DATE},push=true \
-      --output type=image,name=${CONTAINER_IMAGE}:latest,push=true
+    # Build and push the image
+    - /kaniko/executor
+      --context=/workspace
+      --dockerfile=/workspace/Dockerfile
+      --build-arg ODOO_VERSION=${ODOO_VERSION}
+      --destination ${CONTAINER_IMAGE}:${BUILD_DATE}
+      --destination ${CONTAINER_IMAGE}:latest
