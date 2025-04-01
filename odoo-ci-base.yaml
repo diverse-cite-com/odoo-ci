@@ -40,6 +40,14 @@ build:
     - rm -rf ./.repos/* 2>/dev/null || true
     # Update submodules
     - git submodule update --init --recursive
+    # Get the standard dockerfile
+    - git clone git@git.bemade.org:bemade/odoo-ci.git
+    - |
+      if [[ $COMMUNITY ]]; then
+        dockerfile="odoo-ci/Dockerfile-community"
+      else
+        dockerfile="odoo-ci/Dockerfile"
+      fi
   script:
     - buildkitd --addr unix:///run/buildkit/buildkitd.sock &
     - sleep 5  # Give buildkitd time to start
@@ -50,7 +58,7 @@ build:
       --local context=. \
       --local dockerfile=. \
       --opt build-arg:ODOO_VERSION=${ODOO_VERSION} \
-      --opt filename=./Dockerfile \
+      --opt filename=$dockerfile \
       --ssh default \
       --output type=image,name=${CONTAINER_IMAGE}:${BUILD_DATE},push=true \
       --output type=image,name=${CONTAINER_IMAGE}:latest,push=true
