@@ -2,18 +2,29 @@
 FROM alpine:3.16 AS builder
 
 # Install git and SSH client
-RUN apk add --no-cache git openssh-client
+RUN apk add --no-cache git openssh-client bash
 
 # Create a directory structure to copy to the final image
 RUN mkdir -p /kaniko-additions/bin && \
     mkdir -p /kaniko-additions/.ssh && \
     chmod 700 /kaniko-additions/.ssh
 
-# Copy git and ssh binaries and their dependencies
-RUN cp $(which git) /kaniko-additions/bin/ && \
+# Copy shell, git and ssh binaries and their dependencies
+RUN cp /bin/sh /kaniko-additions/bin/ && \
+    cp /bin/bash /kaniko-additions/bin/ && \
+    cp $(which git) /kaniko-additions/bin/ && \
     cp $(which ssh) /kaniko-additions/bin/ && \
     cp $(which ssh-agent) /kaniko-additions/bin/ && \
     cp $(which ssh-add) /kaniko-additions/bin/ && \
+    cp $(which date) /kaniko-additions/bin/ && \
+    cp $(which find) /kaniko-additions/bin/ && \
+    cp $(which ls) /kaniko-additions/bin/ && \
+    cp $(which mkdir) /kaniko-additions/bin/ && \
+    cp $(which mv) /kaniko-additions/bin/ && \
+    cp $(which rm) /kaniko-additions/bin/ && \
+    cp $(which cat) /kaniko-additions/bin/ && \
+    cp $(which chmod) /kaniko-additions/bin/ && \
+    cp $(which eval) /kaniko-additions/bin/ 2>/dev/null || true && \
     cp -r /usr/lib/ /kaniko-additions/ && \
     cp -r /lib/ /kaniko-additions/ && \
     cp -r /etc/ssl /kaniko-additions/etc/
@@ -27,7 +38,9 @@ COPY --from=builder /kaniko-additions/ /
 # Set up SSH configuration
 ENV GIT_SSH_COMMAND="/bin/ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
 ENV HOME=/kaniko
-ENV PATH="/bin:${PATH}"
+ENV PATH="/bin:/kaniko:${PATH}"
+
+# No need to run busybox --install as we're copying the binaries directly
 
 # Keep the entrypoint as is
 ENTRYPOINT ["/kaniko/executor"]

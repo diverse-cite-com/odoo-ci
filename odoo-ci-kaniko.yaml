@@ -10,16 +10,17 @@ build:
   tags: [kubernetes]
   image:
     name: ${CUSTOM_KANIKO_IMAGE}
-    entrypoint: [""]
+    entrypoint: ["/bin/sh", "-c"]
   variables:
     # Pass CI registry credentials to Kaniko
     DOCKER_AUTH_CONFIG: '{"auths":{"${HARBOR_URL}":{"username":"${HARBOR_USERNAME}","password":"${HARBOR_PASSWORD}"}}}'
-  before_script:
-    # Set up SSH for GitHub access
-    - mkdir -p /kaniko/.ssh
-    - chmod 700 /kaniko/.ssh
-    # Configure SSH to not verify host keys
+  script:
     - |
+      # Set up SSH for GitHub access
+      mkdir -p /kaniko/.ssh
+      chmod 700 /kaniko/.ssh
+
+      # Configure SSH to not verify host keys
       cat > /kaniko/.ssh/config << EOF
       Host github.com
         StrictHostKeyChecking no
@@ -29,45 +30,51 @@ build:
         StrictHostKeyChecking no
         UserKnownHostsFile=/dev/null
       EOF
-    - chmod 600 /kaniko/.ssh/config
-    # Add the SSH key
-    - cp "$SSH_KEY_GITHUB" /kaniko/.ssh/github_key
-    - chmod 600 /kaniko/.ssh/github_key
-    # Set up SSH agent
-    - eval $(ssh-agent -s)
-    - ssh-add /kaniko/.ssh/github_key
-    # Get the submodules for extra-addons
-    - git submodule update --init --recursive --recommend-shallow
-    # Get the standard dockerfile
-    - git clone git@git.bemade.org:bemade/odoo-ci.git
-    - |
+      chmod 600 /kaniko/.ssh/config
+
+      # Add the SSH key
+      cp "$SSH_KEY_GITHUB" /kaniko/.ssh/github_key
+      chmod 600 /kaniko/.ssh/github_key
+
+      # Set up SSH agent
+      eval $(ssh-agent -s)
+      ssh-add /kaniko/.ssh/github_key
+
+      # Get the submodules for extra-addons
+      git submodule update --init --recursive --recommend-shallow
+
+      # Get the standard dockerfile
+      git clone git@git.bemade.org:bemade/odoo-ci.git
+      
       if [[ $COMMUNITY ]]; then
         dockerfile="odoo-ci/Dockerfile-community"
       else
         dockerfile="odoo-ci/Dockerfile"
       fi
-    # Convert symlinks in ./addons to full folders
-    - home="$(pwd)"
-    - |
+
+      # Convert symlinks in ./addons to full folders
+      home="$(pwd)"
       if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
         mkdir -p ./addons-new \
         && cd ./addons-new \
         && find ../addons -type l \
           -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
       fi
-    - |
-      cd "$home" && \
+
+      cd "$home"
       if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
         mv -f ./addons-new/* ./addons/ \
           && rm -rf addons-new
       fi
-    - export BUILD_DATE=$(date +%Y-%m-%d)
-  script:
-    # Run Kaniko executor
-    - /kaniko/executor 
-      --context="${CI_PROJECT_DIR}"
-      --dockerfile="${dockerfile}"
-      --build-arg="ODOO_VERSION=${ODOO_VERSION}"
-      --destination="${CONTAINER_IMAGE}:${BUILD_DATE}"
-      --destination="${CONTAINER_IMAGE}:latest"
-      --cleanup
+
+      # Set build date
+      BUILD_DATE=$(date +%Y-%m-%d)
+      
+      # Run Kaniko executor
+      /kaniko/executor \
+        --context="${CI_PROJECT_DIR}" \
+        --dockerfile="${dockerfile}" \
+        --build-arg="ODOO_VERSION=${ODOO_VERSION}" \
+        --destination="${CONTAINER_IMAGE}:${BUILD_DATE}" \
+        --destination="${CONTAINER_IMAGE}:latest" \
+        --cleanup
