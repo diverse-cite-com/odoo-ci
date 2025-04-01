@@ -1,0 +1,33 @@
+# Multi-stage build for Kaniko with SSH support
+FROM alpine:3.16 AS builder
+
+# Install git and SSH client
+RUN apk add --no-cache git openssh-client
+
+# Create a directory structure to copy to the final image
+RUN mkdir -p /kaniko-additions/bin && \
+    mkdir -p /kaniko-additions/.ssh && \
+    chmod 700 /kaniko-additions/.ssh
+
+# Copy git and ssh binaries and their dependencies
+RUN cp $(which git) /kaniko-additions/bin/ && \
+    cp $(which ssh) /kaniko-additions/bin/ && \
+    cp $(which ssh-agent) /kaniko-additions/bin/ && \
+    cp $(which ssh-add) /kaniko-additions/bin/ && \
+    cp -r /usr/lib/ /kaniko-additions/ && \
+    cp -r /lib/ /kaniko-additions/ && \
+    cp -r /etc/ssl /kaniko-additions/etc/
+
+# Final image
+FROM gcr.io/kaniko-project/executor:v1.9.1
+
+# Copy files from builder
+COPY --from=builder /kaniko-additions/ /
+
+# Set up SSH configuration
+ENV GIT_SSH_COMMAND="/bin/ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+ENV HOME=/kaniko
+ENV PATH="/bin:${PATH}"
+
+# Keep the entrypoint as is
+ENTRYPOINT ["/kaniko/executor"]
