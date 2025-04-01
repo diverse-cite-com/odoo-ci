@@ -8,21 +8,8 @@ stages:
   - prepare
   - build
 
-# Define a template with the shared volume configuration
-.with_shared_volume:
-  tags:
-    - kubernetes
-  kubernetes:
-    volumes:
-      - name: workspace-volume
-        emptyDir: {}
-    volume_mounts:
-      - name: workspace-volume
-        mount_path: /workspace
-
 prepare:
   stage: prepare
-  extends: .with_shared_volume
   script:
     - apk add --no-cache git openssh-client findutils tar
     # Set up SSH for GitHub access
@@ -72,14 +59,13 @@ prepare:
         dockerfile="odoo-ci/Dockerfile"
       fi
     # Create a minimal build context with only what's needed
-    - mkdir -p /workspace
-    - cp -r addons /workspace/
-    - cp requirements.txt /workspace/ || echo "No requirements.txt found"
-    - cp "$dockerfile" /workspace/Dockerfile
+    - mkdir -p workspace
+    - cp -r addons workspace/
+    - cp requirements.txt workspace/ || echo "No requirements.txt found"
+    - cp "$dockerfile" workspace/Dockerfile
 
 build_amd64:
   stage: build
-  extends: .with_shared_volume
   needs:
     - prepare
   image:
@@ -93,8 +79,8 @@ build_amd64:
     - export BUILD_DATE=$(date +%Y-%m-%d)
     # Build and push the image
     - /kaniko/executor
-      --context=/workspace
-      --dockerfile=/workspace/Dockerfile
+      --context=./workspace
+      --dockerfile=./workspace/Dockerfile
       --build-arg ODOO_VERSION=${ODOO_VERSION}
       --destination ${CONTAINER_IMAGE}:${BUILD_DATE}
       --destination ${CONTAINER_IMAGE}:latest
