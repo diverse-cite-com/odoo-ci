@@ -1,4 +1,4 @@
-image: moby/buildkit:latest
+image: moby/buildkit:rootless
 
 variables:
   DOCKER_DRIVER: overlay2
@@ -6,6 +6,7 @@ variables:
   BUILDKIT_PROGRESS: plain
   # Enable BuildKit features
   DOCKER_BUILDKIT: 1
+  BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
 
 stages:
   - build
@@ -49,7 +50,7 @@ build:
         dockerfile="odoo-ci/Dockerfile"
       fi
   script:
-    - buildkitd --addr unix:///run/buildkit/buildkitd.sock &
+    - buildkitd ${BUILDKITD_FLAGS} --addr unix:///run/buildkit/buildkitd.sock &
     - sleep 5  # Give buildkitd time to start
     - export BUILD_DATE=$(date +%Y-%m-%d)
     # Use buildctl directly for more control
