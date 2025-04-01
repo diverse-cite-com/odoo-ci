@@ -77,6 +77,8 @@ build_amd64:
     - echo "{\"auths\":{\"$HARBOR_URL\":{\"username\":\"$HARBOR_USERNAME\",\"password\":\"$HARBOR_PASSWORD\"}}}" > /kaniko/.docker/config.json
     # Set the build date
     - export BUILD_DATE=$(date +%Y-%m-%d)
+    # Debug
+    - ls /workspace
     # Build and push the image
     - /kaniko/executor
       --context=/workspace
