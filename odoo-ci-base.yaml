@@ -43,12 +43,4 @@ build:
   script:
     - export BUILD_DATE=$(date +%Y-%m-%d)
     # Use buildctl directly for more control
-    - buildctl build \
-        --frontend=dockerfile.v0 \
-        --local context=. \
-        --local dockerfile=. \
-        --opt filename="$dockerfile" \
-        --opt build-arg:ODOO_VERSION=${ODOO_VERSION} \
-        --ssh default \
-        --output type=image,name=${CONTAINER_IMAGE}:${BUILD_DATE},push=true \
-        --output type=image,name=${CONTAINER_IMAGE}:latest,push=true
+    - buildctl build --frontend=dockerfile.v0 --local context=. --local dockerfile=. --opt filename="Dockerfile" --opt build-arg:ODOO_VERSION=${ODOO_VERSION} --ssh default --output type=image,name=${CONTAINER_IMAGE}:${BUILD_DATE},push=true --output type=image,name=${CONTAINER_IMAGE}:latest,push=true
