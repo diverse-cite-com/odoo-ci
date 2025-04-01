@@ -41,13 +41,14 @@ build:
     # Update submodules
     - git submodule update --init --recursive
   script:
+    - buildkitd --addr unix:///run/buildkit/buildkitd.sock &
+    - sleep 5  # Give buildkitd time to start
     - export BUILD_DATE=$(date +%Y-%m-%d)
     # Use buildctl directly for more control
     - buildctl build \
         --frontend=dockerfile.v0 \
         --local context=. \
         --local dockerfile=. \
-        --opt filename="$dockerfile" \
         --opt build-arg:ODOO_VERSION=${ODOO_VERSION} \
         --ssh default \
         --output type=image,name=${CONTAINER_IMAGE}:${BUILD_DATE},push=true \
