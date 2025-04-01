@@ -1,71 +1,63 @@
-image:
-  name: gcr.io/kaniko-project/executor:debug
-  entrypoint: [""]
+stages:
+  - prepare
+  - build
 
-variables:
-  CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
-
-before_script:
-  # Set up SSH for GitHub access
-  - 'command -v ssh-agent >/dev/null || ( apt-get update -y && apt-get install openssh-client -y )'
-  - eval $(ssh-agent -s)
-  - mkdir -p ~/.ssh
-  - chmod 700 ~/.ssh
-  # Configure SSH to not verify host keys
-  - |
-    cat > ~/.ssh/config << EOF
-    Host github.com
-      StrictHostKeyChecking no
-      UserKnownHostsFile=/dev/null
-    Host git.bemade.org
-      StrictHostKeyChecking no
-      UserKnownHostsFile=/dev/null
-    EOF
-  - chmod 600 ~/.ssh/config
-  # Add the SSH key
-  - cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
-  - chmod 600 ~/.ssh/github_key
-  - ssh-add ~/.ssh/github_key
-  # Configure Docker registry credentials
-  - mkdir -p /kaniko/.docker
-  - echo "{\"auths\":{\"$HARBOR_URL\":{\"username\":\"$HARBOR_USERNAME\",\"password\":\"$HARBOR_PASSWORD\"}}}" > /kaniko/.docker/config.json
-  # Clean up submodules directory
-  - rm -rf ./.repos/*
+prepare:
+  stage: prepare
+  image: alpine:latest
+  script:
+    - apk add --no-cache git openssh-client
+    # Set up SSH for GitHub access
+    - eval $(ssh-agent -s)
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    # Configure SSH
+    - |
+      cat > ~/.ssh/config << EOF
+      Host github.com
+        StrictHostKeyChecking no
+        UserKnownHostsFile=/dev/null
+      Host git.bemade.org
+        StrictHostKeyChecking no
+        UserKnownHostsFile=/dev/null
+      EOF
+    - chmod 600 ~/.ssh/config
+    # Add the SSH key
+    - cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
+    - chmod 600 ~/.ssh/github_key
+    - ssh-add ~/.ssh/github_key
+    # Get the submodules and prepare the build context
+    - git submodule update --init --recursive --recommend-shallow
+    - git clone git@git.bemade.org:bemade/odoo-ci.git
+    # Process the rest of your preparation steps...
+    # Create a tar of the prepared context
+    - tar -czf build-context.tar.gz .
+    # Upload as artifact for the next stage
+  artifacts:
+    paths:
+      - build-context.tar.gz
 
 build_amd64:
   stage: build
-  tags:
-    - docker
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
   script:
-    # Get the submodules for extra-addons
-    - git submodule update --init --recursive --recommend-shallow
-    # Get the standard dockerfile
-    - git clone git@git.bemade.org:bemade/odoo-ci.git
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$HARBOR_URL\":{\"username\":\"$HARBOR_USERNAME\",\"password\":\"$HARBOR_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - tar -xzf build-context.tar.gz
+    - export BUILD_DATE=$(date +%Y-%m-%d)
     - |
       if [[ $COMMUNITY ]]; then
         dockerfile="odoo-ci/Dockerfile-community"
       else
         dockerfile="odoo-ci/Dockerfile"
       fi
-    # Convert symlinks in ./addons to full folders
-    - home="$(pwd)"
-    - |
-      if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
-        mkdir -p ./addons-new \
-        && cd ./addons-new \
-        && find ../addons -type l \
-          -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
-      fi
-    - |
-      cd "$home" && \
-      if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
-        mv -f ./addons-new/* ./addons/ \
-          && rm -rf addons-new
-      fi
-    - export BUILD_DATE=$(date +%Y-%m-%d)
     - /kaniko/executor 
       --context .
       --dockerfile "$dockerfile" 
       --build-arg ODOO_VERSION=${ODOO_VERSION}
       --destination ${CONTAINER_IMAGE}:${BUILD_DATE}
       --destination ${CONTAINER_IMAGE}:latest
+  dependencies:
+    - prepare
