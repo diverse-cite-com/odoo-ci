@@ -3,11 +3,12 @@ image: docker:latest
 services:
   - name: docker:dind
     command: ["--tls=false"]
+    entrypoint: ["dockerd-entrypoint.sh", "--tls=false"]
 
 variables:
   DOCKER_DRIVER: overlay2
   CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
-  DOCKER_HOST: tcp://docker:2376
+  DOCKER_HOST: tcp://docker:2375 # 2376 would be for TLS
   DOCKER_TLS_CERTDIR: "" # Disable TLS
 
 stages:
