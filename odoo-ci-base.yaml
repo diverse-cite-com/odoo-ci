@@ -2,6 +2,7 @@ image: docker:latest
 
 services:
   - docker:dind
+    command: ["--tls=false"]
 
 variables:
   DOCKER_DRIVER: overlay2
