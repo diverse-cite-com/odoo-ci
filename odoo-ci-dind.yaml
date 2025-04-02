@@ -18,6 +18,7 @@ build:
     DOCKER_TLS_CERTDIR: "/certs"
     DOCKER_TLS_VERIFY: 1
     DOCKER_CERT_PATH: "/certs/client"
+    DOCKER_DRIVER: overlay2
     # Pass registry credentials to Docker
     DOCKER_AUTH_CONFIG: '{"auths":{"${HARBOR_URL}":{"username":"${HARBOR_USERNAME}","password":"${HARBOR_PASSWORD}"}}}'
   script:
