@@ -11,13 +11,12 @@ build:
   services:
     - name: docker:20.10.16-dind
       alias: docker
+      command: ["--tls=false"]
   variables:
     # Tell docker CLI to use the docker daemon started by the service
-    DOCKER_HOST: tcp://docker:2376
-    # Use TLS settings for secure communication with the daemon
-    DOCKER_TLS_CERTDIR: "/certs"
-    DOCKER_TLS_VERIFY: 1
-    DOCKER_CERT_PATH: "/certs/client"
+    DOCKER_HOST: tcp://docker:2375
+    # Disable TLS since we're using an internal connection
+    DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
     # Pass registry credentials to Docker
     DOCKER_AUTH_CONFIG: '{"auths":{"${HARBOR_URL}":{"username":"${HARBOR_USERNAME}","password":"${HARBOR_PASSWORD}"}}}'
