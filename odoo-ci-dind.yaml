@@ -47,8 +47,8 @@ build:
       EOF
       chmod 600 ~/.ssh/config
 
-      # Add the SSH key
-      echo "${SSH_PRIVATE_KEY}" > ~/.ssh/github_key
+      # Add the SSH key - copy from the CI/CD variable
+      cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
       chmod 600 ~/.ssh/github_key
       eval $(ssh-agent -s)
       ssh-add ~/.ssh/github_key
