@@ -29,7 +29,7 @@ podSecurityContext:
   runAsUser: 100
 priorityClassName: ''
 rbac:
-  clusterWideAccess: true
+  clusterWideAccess: false
   create: true
   generatedServiceAccountName: ''
   imagePullSecrets: []
@@ -39,8 +39,14 @@ rbac:
       - gitlab-runner
   rules:
     - apiGroups: [""]
-      resources: ["pods", "pods/exec", "pods/attach", "secrets", "configmaps"]
-      verbs: ["get", "list", "watch", "create", "patch", "delete"]
+      resources: ["pods", "pods/exec", "pods/attach"]
+      verbs: ["get", "list", "watch", "create", "patch", "delete", "update"]
+    - apiGroups: [""]
+      resources: ["secrets"]
+      verbs: ["get", "create", "delete", "update", "patch"]
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get", "list", "watch", "create"]
     - apiGroups: [""]
       resources: ["nodes"]
       verbs: ["get", "list", "watch"]
@@ -70,34 +76,21 @@ runners:
         allowed_images = ["*"]
         poll_timeout = 600
         poll_interval = 5
-        service_account_overwrite_allowed = true
+        service_account_overwrite_allowed = "true"
+        pull_policy = "always"
         [runners.kubernetes.pod_annotations]
-          cluster-autoscaler.kubernetes.io/safe-to-evict = true
-        [runners.kubernetes.volumes]
-          [[runners.kubernetes.volumes.host_path]]
-            name = "docker-certs"
-            mount_path = "/certs"
-            host_path = "/certs"
-          [[runners.kubernetes.volumes.host_path]]
-            name = "docker-socket"
-            mount_path = "/var/run/docker.sock"
-            host_path = "/var/run/docker.sock"
-          [[runners.kubernetes.volumes.empty_dir]]
-            name = "docker-builds"
-            mount_path = "/builds"
-          [[runners.kubernetes.volumes.empty_dir]]
-            name = "docker-cache"
-            mount_path = "/cache"
+          "cluster-autoscaler.kubernetes.io/safe-to-evict" = "true"
   configPath: ''  
 runtimeClassName: ''
 secrets: []
+# Security context for the GitLab Runner pod itself
+# The DinD service has its own security context defined in the runners.kubernetes config
 securityContext:
-  allowPrivilegeEscalation: true
+  privileged: false
+  allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
-  privileged: true
-  readOnlyRootFilesystem: false
   runAsNonRoot: true
 service:
   enabled: false
@@ -129,4 +122,3 @@ gitlabUrl: https://git.bemade.org
 global:
   cattle:
     systemProjectId: p-b4p8r
-runnerToken: glrt-j37E2twpnNP3ws_ATHCi
