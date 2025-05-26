@@ -4,9 +4,6 @@ FROM docker.bemade.org/bemade/odoo${ODOO_VERSION}e
 USER 0
 RUN pip install --upgrade --break-system-packages pytz
 COPY --chown=odoo:odoo ./addons /mnt/extra-addons
-RUN if [ -f requirements.txt ]; then \
-        cp requirements.txt /mnt/extra-addons/requirements.txt && \
-        chown odoo:odoo /mnt/extra-addons/requirements.txt; \
-    fi
+COPY --chown=odoo:odoo requirements.tx[t] /mnt/extra-addons/ 2>/dev/null || true
 RUN if [ -f /mnt/extra-addons/requirements.txt ]; then pip install -r /mnt/extra-addons/requirements.txt --break-system-packages; fi
 USER odoo
