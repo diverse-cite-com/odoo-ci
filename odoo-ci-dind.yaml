@@ -136,5 +136,6 @@ deploy:
       helm upgrade \
         --namespace "${HELM_NAMESPACE}" \
         --set image="${CONTAINER_IMAGE}@${IMAGE_DIGEST}" \
+        --reuse-values \
         "${HELM_RELEASE_NAME}" \
         "bemade/odoo-instance"
