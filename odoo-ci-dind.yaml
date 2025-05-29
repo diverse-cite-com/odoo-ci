@@ -102,7 +102,7 @@ build:
         .
 
       # Get the image digest
-      docker inspect --format='{{.Id}}' "${CONTAINER_IMAGE}:latest" > /image-digest.txt
+      docker inspect --format='{{.Id}}' "${CONTAINER_IMAGE}:latest" > image-digest.txt
 
       # Push the image with date and latest tags
       docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
@@ -113,7 +113,7 @@ build:
   # Save the image digest as an artifact for the deploy job
   artifacts:
     paths:
-      - /image-digest.txt
+      - image-digest.txt
     expire_in: 1 hour
 
 # Deploy stage will only run if HELM_NAMESPACE and HELM_RELEASE_NAME are defined
@@ -128,7 +128,7 @@ deploy:
   script:
     - |
       # Read the image digest from the file
-      IMAGE_DIGEST=$(cat /tmp/image-digest.txt)
+      IMAGE_DIGEST=$(cat image-digest.txt)
 
       helm upgrade \
         --namespace "${HELM_NAMESPACE}" \
