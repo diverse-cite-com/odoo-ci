@@ -101,13 +101,14 @@ build:
         -t "${CONTAINER_IMAGE}:latest" \
         .
 
-      # Get the image digest and save it to a file for the deploy stage
-      docker inspect --format='{{index .RepoDigests 0}}' "${CONTAINER_IMAGE}:latest" \
-        | cut -d'@' -f2 > /tmp/image-digest.txt
+      # Get the image digest
+      docker inspect --format='{{.Id}}' "${CONTAINER_IMAGE}:latest" > /tmp/image-digest.txt
 
       # Push the image with date and latest tags
       docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
       docker push "${CONTAINER_IMAGE}:latest"
+
+      echo "Image built and pushed with digest: ${IMAGE_DIGEST}"
 
   # Save the image digest as an artifact for the deploy job
   artifacts:
