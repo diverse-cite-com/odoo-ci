@@ -130,6 +130,9 @@ deploy:
       # Read the image digest from the file
       IMAGE_DIGEST=$(cat image-digest.txt)
 
+      helm repo add bemade https://git.bemade.org/bemade/helm-charts.git
+      helm repo update
+
       helm upgrade \
         --namespace "${HELM_NAMESPACE}" \
         --set image="${CONTAINER_IMAGE}@${IMAGE_DIGEST}" \
