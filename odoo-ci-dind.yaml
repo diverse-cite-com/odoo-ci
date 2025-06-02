@@ -114,15 +114,12 @@ build:
     expire_in: 1 hour
 
 # Deploy stage will only run if HELM_NAMESPACE and HELM_RELEASE_NAME are defined
-.deploy_template: &deploy_template
+deploy:
   stage: deploy
   image: alpine/helm:3.12.0
   needs: [build]  # Ensure build job runs first
   dependencies:
     - build  # Download artifacts from build job
-    
-deploy:
-  <<: *deploy_template
   rules:
     - if: $HELM_NAMESPACE && $HELM_RELEASE_NAME
       when: on_success
