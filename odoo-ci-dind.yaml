@@ -9,6 +9,8 @@ build:
   stage: build
   tags: [kubernetes]
   image: docker:20.10.16
+  rules:
+    - when: always  # Always run the build job
   services:
     - name: docker:20.10.16-dind
       alias: docker
@@ -118,12 +120,17 @@ deploy:
   stage: deploy
   image: alpine/helm:3.12.0
   tags: [kubernetes]
-  needs: [build]  # Ensure build job runs first
+  needs: ["build"]  # Ensure build job runs first
   dependencies:
-    - build  # Download artifacts from build job
+    - "build"  # Download artifacts from build job
   rules:
-    - if: $HELM_NAMESPACE && $HELM_RELEASE_NAME
+    # Explicit rule for MRs from staging to production - do not deploy
+    - if: $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "18.0" && $CI_COMMIT_REF_NAME == "18.0-staging"
+      when: never
+    # Deploy for staging branch
+    - if: $HELM_NAMESPACE && $HELM_RELEASE_NAME && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
       when: on_success
+    # Default - don't deploy
     - when: never
   script:
     - |
