@@ -104,6 +104,7 @@ build:
 
       # Build the Docker image with date and latest tags
       docker build \
+        --no-cache \
         -f "${dockerfile}" \
         --build-arg ODOO_VERSION=${ODOO_VERSION} \
         -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
