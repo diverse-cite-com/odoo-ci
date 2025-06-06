@@ -31,6 +31,7 @@ build:
     DOCKER_AUTH_CONFIG: '{"auths":{"${HARBOR_URL}":{"username":"${HARBOR_USERNAME}","password":"${HARBOR_PASSWORD}"}}}'
   script:
     - |
+      set -x
       # Install git and ssh
       apk add --no-cache git openssh-client bash shadow
 
