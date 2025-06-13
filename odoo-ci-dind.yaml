@@ -20,10 +20,14 @@ build:
   image: docker:20.10.16
   rules:
     - when: always  # Always run the build job
+  services:
+    - name: docker:20.10.16-dind
+      command: ["--tls=false"]
+      alias: docker
   variables:
-    # Use the Docker socket within the same pod
-    DOCKER_HOST: unix:///var/run/docker.sock
-    # No TLS needed for local socket
+    # When using dind service, we need to instruct docker to talk with it
+    DOCKER_HOST: tcp://docker:2375
+    # These settings ensure docker can communicate with the dind service
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
     # Pass registry credentials to Docker
