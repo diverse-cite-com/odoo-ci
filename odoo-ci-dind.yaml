@@ -12,7 +12,7 @@ workflow:
     - when: always
 before_script:
   # Convert the image name to lowercase
-  - export CONTAINER_IMAGE=$(echo "$CONTAINER_IMAGE" | sed 's/.*/\L&/')
+  - export CONTAINER_IMAGE=$(echo "$CONTAINER_IMAGE" | awk '{print tolower($0)}')
 
 build:
   stage: build
