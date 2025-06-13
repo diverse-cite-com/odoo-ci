@@ -20,13 +20,10 @@ build:
   image: docker:20.10.16
   rules:
     - when: always  # Always run the build job
-  services:
-    - name: docker:20.10.16-dind
-      command: ["--tls=false"]
   variables:
-    # Tell docker CLI to use the docker daemon started by the service
-    DOCKER_HOST: tcp://docker:2375
-    # Disable TLS since we're using an internal connection
+    # Use the Docker socket within the same pod
+    DOCKER_HOST: unix:///var/run/docker.sock
+    # No TLS needed for local socket
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
     # Pass registry credentials to Docker
