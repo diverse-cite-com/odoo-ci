@@ -10,6 +10,9 @@ workflow:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       when: never
     - when: always
+before_script:
+  # Convert the image name to lowercase
+  - export CONTAINER_IMAGE=$(echo "$CONTAINER_IMAGE" | sed 's/.*/\L&/')
 
 build:
   stage: build
