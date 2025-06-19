@@ -131,7 +131,7 @@ build:
 # Deploy stage will only run if HELM_NAMESPACE and HELM_RELEASE_NAME are defined
 deploy:
   stage: deploy
-  image: alpine/helm:3.12.0
+  image: alpine/helm:3
   tags: [kubernetes]
   needs: ["build"]  # Ensure build job runs first
   dependencies:
