@@ -22,9 +22,11 @@ build:
     - when: always  # Always run the build job
   services:
     - name: docker:20.10.16-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
   variables:
     # When using dind service, we need to instruct docker to talk with it
-    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_HOST: tcp://docker:2375
     # These settings ensure docker can communicate with the dind service
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
@@ -33,6 +35,8 @@ build:
   script:
     - |
       set -x
+      # Check docker is running or fail fast
+      docker image ls
       # Install git and ssh
       apk add --no-cache git openssh-client bash shadow
 
