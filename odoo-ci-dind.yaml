@@ -22,11 +22,9 @@ build:
     - when: always  # Always run the build job
   services:
     - name: docker:20.10.16-dind
-      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
-      alias: docker
   variables:
     # When using dind service, we need to instruct docker to talk with it
-    DOCKER_HOST: tcp://docker:2375
+    DOCKER_HOST: unix:///var/run/docker.sock
     # These settings ensure docker can communicate with the dind service
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
