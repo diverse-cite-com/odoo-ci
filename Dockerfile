@@ -11,13 +11,13 @@ RUN if [ "$(pip --version | awk '{print $2}' | awk -F. '{ printf("%d%03d%03d\n",
     fi
 
 # Install packages with appropriate flags
-RUN pip install --upgrade $(cat /tmp/break_sys_packages) pytz
+RUN pip install $(cat /tmp/break_sys_packages) --upgrade pytz
 
 COPY --chown=odoo:odoo ./addons /mnt/extra-addons
 COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
 
 # Install requirements if present
 RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
-      pip install -r /mnt/extra-addons/requirements.txt $(cat /tmp/break_sys_packages); \
+      pip install $(cat /tmp/break_sys_packages) --ignore-installed -r /mnt/extra-addons/requirements.txt; \
     fi
 USER odoo
