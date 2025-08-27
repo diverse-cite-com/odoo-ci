@@ -7,9 +7,9 @@ stages:
 
 workflow:
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: never
-    - when: always
+    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
+      when: always
+    - when: never
 before_script:
   # Convert the image name to lowercase
   - export CONTAINER_IMAGE=$(echo "$CONTAINER_IMAGE" | awk '{print tolower($0)}')
