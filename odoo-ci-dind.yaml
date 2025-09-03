@@ -1,3 +1,5 @@
+# Set ALLOWED_BRANCHES in your project's .gitlab-ci.yml to specify which branches should trigger this workflow
+# Format: comma-separated list of branch names (e.g., "main,staging,develop")
 variables:
   CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
 
@@ -7,7 +9,7 @@ stages:
 
 workflow:
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $ALLOWED_BRANCHES =~ /(^|,)${CI_COMMIT_BRANCH}(,|$)/
       when: always
     - when: never
 before_script:
@@ -19,7 +21,9 @@ build:
   tags: [kubernetes]
   image: docker:20.10.16
   rules:
-    - when: always  # Always run the build job
+    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $ALLOWED_BRANCHES =~ /(^|,)${CI_COMMIT_BRANCH}(,|$)/
+      when: always
+    - when: never
   services:
     - name: docker:20.10.16-dind
       alias: docker
