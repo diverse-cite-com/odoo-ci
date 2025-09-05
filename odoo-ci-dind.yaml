@@ -113,6 +113,7 @@ build:
         --no-cache \
         -f "${dockerfile}" \
         --build-arg ODOO_VERSION=${ODOO_VERSION} \
+        --build-arg REGISTRY=${CI_REGISTRY} \
         -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
         -t "${CONTAINER_IMAGE}:latest" \
         .
