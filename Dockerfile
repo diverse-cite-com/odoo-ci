@@ -1,5 +1,5 @@
 ARG ODOO_VERSION=18.0
-FROM registry.bemade.org/bemade/docker-odoo-enterprise/odoo${ODOO_VERSION}
+FROM registry.bemade.org/bemade/docker-odoo-enterprise/odoo-enterprise-${ODOO_VERSION}
 
 USER 0
 

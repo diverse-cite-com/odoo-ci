@@ -1,6 +1,5 @@
 # Set ALLOWED_BRANCHES in your project's .gitlab-ci.yml to specify which branches should trigger this workflow
 # Format: comma-separated list of branch names (e.g., "main,staging,develop")
-#
 
 variables:
   CONTAINER_IMAGE: "$CI_REGISTRY_IMAGE/odoo-$CI_COMMIT_BRANCH"
