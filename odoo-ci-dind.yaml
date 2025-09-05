@@ -33,7 +33,7 @@ build:
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
     # Pass registry credentials to Docker
-    DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_REGISTRY_USERNAME}","password":"${CI_REGISTRY_PASSWORD}"}}}'
+    DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_REGISTRY_USER}","password":"${CI_REGISTRY_PASSWORD}"}}}'
   script:
     - |
       set -x
