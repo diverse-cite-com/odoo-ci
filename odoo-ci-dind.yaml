@@ -33,7 +33,7 @@ build:
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
     # Pass registry credentials to Docker
-    DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_REGISTRY_USER}","password":"${CI_REGISTRY_PASSWORD}"}}}'
+    DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
   script:
     - |
       set -x
@@ -107,7 +107,7 @@ build:
       BUILD_DATE=$(date +%Y-%m-%d)
 
       # Login to Docker registry
-      echo "${CI_REGISTRY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_REGISTRY_USER}" --password-stdin
+      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
 
       # Build the Docker image with date and latest tags
       docker build \
