@@ -1,5 +1,9 @@
 # Set ALLOWED_BRANCHES in your project's .gitlab-ci.yml to specify which branches should trigger this workflow
 # Format: comma-separated list of branch names (e.g., "main,staging,develop")
+#
+
+variables:
+  CONTAINER_IMAGE: "$CI_REGISTRY_IMAGE/odoo-$CI_COMMIT_BRANCH"
 stages:
   - build
   - deploy
@@ -110,13 +114,13 @@ build:
         --no-cache \
         -f "${dockerfile}" \
         --build-arg ODOO_VERSION=${ODOO_VERSION} \
-        -t "${CI_REGISTRY_IMAGE}:${BUILD_DATE}" \
-        -t "${CI_REGISTRY_IMAGE}:latest" \
+        -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
+        -t "${CONTAINER_IMAGE}:latest" \
         .
 
       # Push the image with date and latest tags
-      docker push "${CI_REGISTRY_IMAGE}:${BUILD_DATE}"
-      docker push "${CI_REGISTRY_IMAGE}:latest" | tee push_output.txt
+      docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
+      docker push "${CONTAINER_IMAGE}:latest" | tee push_output.txt
 
       grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
 
@@ -150,7 +154,7 @@ deploy:
 
       helm upgrade \
         --namespace "${HELM_NAMESPACE}" \
-        --set image="${CI_REGISTRY_IMAGE}@${IMAGE_DIGEST}" \
+        --set image="${CONTAINER_IMAGE}@${IMAGE_DIGEST}" \
         --reuse-values \
         "${HELM_RELEASE_NAME}" \
         "bemade/odoo-instance"
