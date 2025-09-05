@@ -107,7 +107,7 @@ build:
       BUILD_DATE=$(date +%Y-%m-%d)
 
       # Login to Docker registry
-      echo "${CI_REGISTRY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_REGISTRY_USERNAME}" --password-stdin
+      echo "${CI_REGISTRY_PASSWORD}" | docker login ${CI_REGISTRY} --u "${CI_REGISTRY_USER}" --password-stdin
 
       # Build the Docker image with date and latest tags
       docker build \
