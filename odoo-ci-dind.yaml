@@ -1,8 +1,5 @@
 # Set ALLOWED_BRANCHES in your project's .gitlab-ci.yml to specify which branches should trigger this workflow
 # Format: comma-separated list of branch names (e.g., "main,staging,develop")
-variables:
-  CONTAINER_IMAGE: ${HARBOR_HOST}/bemade/${CI_PROJECT_NAMESPACE}-${CI_PROJECT_NAME}-${CI_COMMIT_BRANCH}
-
 stages:
   - build
   - deploy
@@ -12,9 +9,6 @@ workflow:
     - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && ($ALLOWED_BRANCHES == $CI_COMMIT_BRANCH || $ALLOWED_BRANCHES =~ /^${CI_COMMIT_BRANCH},/ || $ALLOWED_BRANCHES =~ /,${CI_COMMIT_BRANCH}$/ || $ALLOWED_BRANCHES =~ /,${CI_COMMIT_BRANCH},/)
       when: always
     - when: never
-before_script:
-  # Convert the image name to lowercase
-  - export CONTAINER_IMAGE=$(echo "$CONTAINER_IMAGE" | awk '{print tolower($0)}')
 
 build:
   stage: build
@@ -116,13 +110,13 @@ build:
         --no-cache \
         -f "${dockerfile}" \
         --build-arg ODOO_VERSION=${ODOO_VERSION} \
-        -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
-        -t "${CONTAINER_IMAGE}:latest" \
+        -t "${CI_REGISTRY_IMAGE}:${BUILD_DATE}" \
+        -t "${CI_REGISTRY_IMAGE}:latest" \
         .
 
       # Push the image with date and latest tags
-      docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
-      docker push "${CONTAINER_IMAGE}:latest" | tee push_output.txt
+      docker push "${CI_REGISTRY_IMAGE}:${BUILD_DATE}"
+      docker push "${CI_REGISTRY_IMAGE}:latest" | tee push_output.txt
 
       grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
 
@@ -156,7 +150,7 @@ deploy:
 
       helm upgrade \
         --namespace "${HELM_NAMESPACE}" \
-        --set image="${CONTAINER_IMAGE}@${IMAGE_DIGEST}" \
+        --set image="${CI_REGISTRY_IMAGE}@${IMAGE_DIGEST}" \
         --reuse-values \
         "${HELM_RELEASE_NAME}" \
         "bemade/odoo-instance"
