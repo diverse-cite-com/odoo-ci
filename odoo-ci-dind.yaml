@@ -36,8 +36,19 @@ build:
   script:
     - |
       set -x
+      
+      # Validate essential environment variables
+      if [ -z "$CI_REGISTRY" ] || [ -z "$CI_DEPLOY_USER" ] || [ -z "$CI_DEPLOY_PASSWORD" ]; then
+        echo "ERROR: Missing required Docker registry credentials"
+        exit 1
+      fi
+      
       # Check docker is running or fail fast
       docker image ls
+
+      # Login to Docker registry or fail fast
+      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
+      
       # Install git and ssh
       apk add --no-cache git openssh-client bash shadow
 
@@ -105,8 +116,6 @@ build:
       # Set build date
       BUILD_DATE=$(date +%Y-%m-%d)
 
-      # Login to Docker registry
-      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
 
       # Build the Docker image with date and latest tags
       docker build \
