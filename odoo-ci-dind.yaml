@@ -9,7 +9,7 @@ stages:
 
 workflow:
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH ~= $ALLOWED_BRANCHES
+    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: always
     - when: never
 
@@ -18,7 +18,7 @@ build:
   tags: [kubernetes]
   image: docker:20.10.16
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH ~= $ALLOWED_BRANCHES
+    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: always
     - when: never
   services:
