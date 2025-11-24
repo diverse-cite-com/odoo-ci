@@ -19,6 +19,6 @@ COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
 
 # Install requirements if present
 RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
-      pip install $(cat /tmp/break_sys_packages) -r /mnt/extra-addons/requirements.txt; \
+      pip install $(cat /tmp/break_sys_packages) --ignore-installed typing-extensions -r /mnt/extra-addons/requirements.txt; \
     fi
 USER odoo
