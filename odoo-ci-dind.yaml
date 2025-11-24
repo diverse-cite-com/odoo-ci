@@ -1,5 +1,5 @@
 # Set ALLOWED_BRANCHES in your project's .gitlab-ci.yml to specify which branches should trigger this workflow
-# Format: comma-separated list of branch names (e.g., "main,staging,develop")
+# Format: re2 regex, see https://github.com/google/re2 
 
 variables:
   CONTAINER_IMAGE: "$CI_REGISTRY_IMAGE/odoo-$CI_COMMIT_BRANCH"
@@ -9,7 +9,7 @@ stages:
 
 workflow:
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && ($ALLOWED_BRANCHES == $CI_COMMIT_BRANCH || $ALLOWED_BRANCHES =~ /^${CI_COMMIT_BRANCH},/ || $ALLOWED_BRANCHES =~ /,${CI_COMMIT_BRANCH}$/ || $ALLOWED_BRANCHES =~ /,${CI_COMMIT_BRANCH},/)
+    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH ~= $ALLOWED_BRANCHES
       when: always
     - when: never
 
@@ -18,7 +18,7 @@ build:
   tags: [kubernetes]
   image: docker:20.10.16
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && ($ALLOWED_BRANCHES == $CI_COMMIT_BRANCH || $ALLOWED_BRANCHES =~ /^${CI_COMMIT_BRANCH},/ || $ALLOWED_BRANCHES =~ /,${CI_COMMIT_BRANCH}$/ || $ALLOWED_BRANCHES =~ /,${CI_COMMIT_BRANCH},/)
+    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH ~= $ALLOWED_BRANCHES
       when: always
     - when: never
   services:
