@@ -11,6 +11,12 @@ RUN if [ "$(pip --version | awk '{print $2}' | awk -F. '{ printf("%d%03d%03d\n",
         echo '' > /tmp/break_sys_packages; \
     fi
 
+# Install build dependencies for Python packages that require compilation
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libcups2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install packages with appropriate flags
 RUN pip install $(cat /tmp/break_sys_packages) --upgrade pytz
 
