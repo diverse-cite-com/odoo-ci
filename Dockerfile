@@ -7,7 +7,8 @@ FROM ${REGISTRY}/bemade/docker-odoo-enterprise/odoo-enterprise-${ODOO_VERSION} A
 USER 0
 
 # Copy project files first to check what's needed
-COPY requirements.txt build-packages.txt runtime-packages.txt /tmp/
+# Using wildcards so missing files don't fail the build
+COPY requirements.tx* build-packages.tx* runtime-packages.tx* /tmp/
 
 # Install build dependencies (build-essential + python3-dev always needed for compilation)
 # Plus any project-specific build packages from build-packages.txt
@@ -28,7 +29,7 @@ FROM ${REGISTRY}/bemade/docker-odoo-enterprise/odoo-enterprise-${ODOO_VERSION}
 
 USER 0
 
-COPY runtime-packages.txt /tmp/
+COPY runtime-packages.tx* /tmp/
 
 # Install project-specific runtime packages if specified
 RUN if [ -f /tmp/runtime-packages.txt ] && [ -s /tmp/runtime-packages.txt ]; then \
