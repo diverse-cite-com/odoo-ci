@@ -139,17 +139,17 @@ build:
       - image-digest.txt
     expire_in: 1 hour
 
-# Deploy stage will only run if HELM_NAMESPACE and HELM_RELEASE_NAME are defined
+# Deploy stage will only run if KUBECTL_NAMESPACE and ODOO_INSTANCE_NAME are defined
 deploy:
   stage: deploy
-  image: alpine/helm:3
+  image: bitnami/kubectl:latest
   tags: [kubernetes]
   needs: ["build"]  # Ensure build job runs first
   dependencies:
     - "build"  # Download artifacts from build job
   rules:
-    # Explicit rule for MRs from staging to production - do not deploy
-    - if: $HELM_NAMESPACE && $HELM_RELEASE_NAME && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
+    # Only deploy on staging branch when namespace and instance name are defined
+    - if: $KUBECTL_NAMESPACE && $ODOO_INSTANCE_NAME && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
       when: on_success
     # Default - don't deploy
     - when: never
@@ -158,12 +158,8 @@ deploy:
       # Read the image digest from the file
       IMAGE_DIGEST=$(cat image-digest.txt)
 
-      helm repo add bemade https://git.bemade.org/bemade/helm-charts/-/raw/main/
-      helm repo update
-
-      helm upgrade \
-        --namespace "${HELM_NAMESPACE}" \
-        --set image="${CONTAINER_IMAGE}@${IMAGE_DIGEST}" \
-        --reuse-values \
-        "${HELM_RELEASE_NAME}" \
-        "bemade/odoo-instance"
+      # Patch the OdooInstance custom resource with the new image
+      kubectl patch odooinstance "${ODOO_INSTANCE_NAME}" \
+        --namespace "${KUBECTL_NAMESPACE}" \
+        --type merge \
+        --patch "{\"spec\":{\"image\":\"${CONTAINER_IMAGE}@${IMAGE_DIGEST}\"}}"
