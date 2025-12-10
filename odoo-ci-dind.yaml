@@ -47,8 +47,9 @@ build:
       # Check docker is running or fail fast
       docker image ls
 
-      # Login to Docker registry or fail fast
+      # Login to Docker registry or fail fast (login to both with and without port)
       echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
+      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY//:443/} -u "${CI_DEPLOY_USER}" --password-stdin
       
       # Install git and ssh
       apk add --no-cache git openssh-client bash shadow
