@@ -2,7 +2,8 @@
 # Format: re2 regex, see https://github.com/google/re2 
 
 variables:
-  CONTAINER_IMAGE: "$CI_REGISTRY_IMAGE/odoo-$CI_COMMIT_BRANCH"
+  # Strip :443 from registry URL to match pull secret configuration
+  CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-$CI_COMMIT_BRANCH"
 stages:
   - build
   - deploy
@@ -36,6 +37,8 @@ build:
   script:
     - |
       set -x
+
+      CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
       
       # Validate essential environment variables
       if [ -z "$CI_REGISTRY" ] || [ -z "$CI_DEPLOY_USER" ] || [ -z "$CI_DEPLOY_PASSWORD" ]; then
@@ -118,11 +121,13 @@ build:
 
 
       # Build the Docker image with date and latest tags
+      # Strip :443 from registry for base image pull
+      REGISTRY_NO_PORT="${CI_REGISTRY//:443/}"
       docker build \
         --no-cache \
         -f "${dockerfile}" \
         --build-arg ODOO_VERSION=${ODOO_VERSION} \
-        --build-arg REGISTRY=${CI_REGISTRY} \
+        --build-arg REGISTRY=${REGISTRY_NO_PORT} \
         -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
         -t "${CONTAINER_IMAGE}:latest" \
         .
@@ -155,6 +160,7 @@ deploy:
     - when: never
   script:
     - |
+      CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
       # Read the image digest from the file
       IMAGE_DIGEST=$(cat image-digest.txt)
 
