@@ -47,9 +47,8 @@ build:
       # Check docker is running or fail fast
       docker image ls
 
-      # Login to Docker registry or fail fast (login to both with and without port)
+      # Login to Docker registry or fail fast
       echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
-      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY//:443/} -u "${CI_DEPLOY_USER}" --password-stdin
       
       # Install git and ssh
       apk add --no-cache git openssh-client bash shadow
@@ -120,13 +119,11 @@ build:
 
 
       # Build the Docker image with date and latest tags
-      # Strip :443 from registry for base image pull
-      REGISTRY_NO_PORT="${CI_REGISTRY//:443/}"
       docker build \
         --no-cache \
         -f "${dockerfile}" \
         --build-arg ODOO_VERSION=${ODOO_VERSION} \
-        --build-arg REGISTRY=${REGISTRY_NO_PORT} \
+        --build-arg REGISTRY=${CI_REGISTRY} \
         -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
         -t "${CONTAINER_IMAGE}:latest" \
         .
