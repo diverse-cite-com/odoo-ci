@@ -38,8 +38,6 @@ build:
     - |
       set -x
 
-      CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
-      
       # Validate essential environment variables
       if [ -z "$CI_REGISTRY" ] || [ -z "$CI_DEPLOY_USER" ] || [ -z "$CI_DEPLOY_PASSWORD" ]; then
         echo "ERROR: Missing required Docker registry credentials"
