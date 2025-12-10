@@ -1,5 +1,5 @@
 ARG ODOO_VERSION=18.0
-ARG REGISTRY=registry.bemade.org
+ARG REGISTRY=registry.bemade.org:443
 FROM ${REGISTRY}/bemade/docker-odoo-enterprise/odoo-enterprise-${ODOO_VERSION}
 
 USER 0
