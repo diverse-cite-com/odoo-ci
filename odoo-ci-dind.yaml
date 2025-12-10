@@ -117,6 +117,8 @@ build:
       # Set build date
       BUILD_DATE=$(date +%Y-%m-%d)
 
+      # Ensure optional files exist (empty is fine, Dockerfile handles it)
+      touch requirements.txt build-packages.txt runtime-packages.txt
 
       # Build the Docker image with date and latest tags
       docker build \
