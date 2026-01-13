@@ -1,0 +1,71 @@
+# Dockerfile-test
+# Extended Odoo image for CI testing with additional dev dependencies
+# Based on the production image but adds testing tools
+
+ARG ODOO_VERSION=18.0
+ARG REGISTRY=registry.bemade.org:443
+FROM ${REGISTRY}/bemade/docker-odoo-enterprise/odoo-enterprise-${ODOO_VERSION}
+
+USER 0
+
+# Copy package list files
+COPY build-packages.txt runtime-packages.txt /tmp/
+
+# Install build dependencies, runtime packages, and testing tools
+RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
+    && RUNTIME_PKGS=$(cat /tmp/runtime-packages.txt | tr '\n' ' ') \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        # Build essentials for compiling Python packages
+        build-essential \
+        python3-dev \
+        # Required for some Odoo dependencies
+        libldap2-dev \
+        libsasl2-dev \
+        libssl-dev \
+        libxml2-dev \
+        libxslt1-dev \
+        # Git for submodule operations and manifestoo
+        git \
+        # PostgreSQL client for database operations
+        postgresql-client \
+        # User-specified packages
+        $BUILD_PKGS \
+        $RUNTIME_PKGS \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
+
+# Check pip version and set break-system-packages flag if needed
+RUN if [ "$(pip --version | awk '{print $2}' | awk -F. '{ printf("%d%03d%03d\n", $1, $2, $3); }')" -ge "$(echo "23.0.0" | awk -F. '{ printf("%d%03d%03d\n", $1, $2, $3); }')" ]; then \
+        echo '--break-system-packages' > /tmp/break_sys_packages; \
+    else \
+        echo '' > /tmp/break_sys_packages; \
+    fi
+
+# Upgrade pytz and install testing tools
+RUN pip install $(cat /tmp/break_sys_packages) --upgrade pytz \
+    && pip install $(cat /tmp/break_sys_packages) \
+        manifestoo \
+        pytest \
+        pytest-odoo \
+        coverage
+
+# Copy addons
+COPY --chown=odoo:odoo ./addons /mnt/extra-addons
+
+# Copy and install requirements
+COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
+RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
+      pip install $(cat /tmp/break_sys_packages) --ignore-installed typing-extensions -r /mnt/extra-addons/requirements.txt; \
+    fi
+
+# Copy test scripts
+COPY --chown=odoo:odoo scripts/ /opt/odoo-ci/scripts/
+RUN chmod +x /opt/odoo-ci/scripts/*.sh 2>/dev/null || true
+
+# Clean up
+RUN rm -f /tmp/break_sys_packages
+
+USER odoo
+
+# Default command for testing
+CMD ["odoo", "--test-enable", "--stop-after-init"]

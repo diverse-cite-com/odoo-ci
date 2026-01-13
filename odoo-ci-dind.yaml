@@ -6,6 +6,7 @@ variables:
   CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-$CI_COMMIT_BRANCH"
 stages:
   - build
+  - test
   - deploy
 
 workflow:
@@ -142,14 +143,154 @@ build:
       - image-digest.txt
     expire_in: 1 hour
 
+# Test stage - runs Odoo tests on changed modules
+# Set TEST_ENABLED=true in your project's .gitlab-ci.yml to enable testing
+# Set TEST_INCLUDE_CODEPENDS=true to also test modules that depend on changed modules
+# Set TEST_DATABASE=<name> to specify test database name (default: test_ci)
+test:
+  stage: test
+  tags: [kubernetes]
+  image: docker:20.10.16
+  needs: ["build"]
+  dependencies:
+    - "build"
+  services:
+    - name: docker:20.10.16-dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+    - name: postgres:15
+      alias: db
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+    DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
+    # PostgreSQL configuration
+    POSTGRES_USER: odoo
+    POSTGRES_PASSWORD: odoo
+    POSTGRES_DB: postgres
+  rules:
+    # Only run tests if TEST_ENABLED is set
+    - if: $TEST_ENABLED == "true" && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
+      when: on_success
+    - when: never
+  script:
+    - |
+      set -e
+      
+      echo "=== Odoo Module Testing ==="
+      
+      # Install dependencies
+      apk add --no-cache git openssh-client bash python3 py3-pip
+      
+      # Install manifestoo for co-dependency detection (if enabled)
+      if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
+        pip3 install --break-system-packages manifestoo || pip3 install manifestoo
+      fi
+      
+      # Set up SSH for submodule access
+      mkdir -p ~/.ssh
+      chmod 700 ~/.ssh
+      cat > ~/.ssh/config << EOF
+      Host github.com
+        StrictHostKeyChecking no
+        UserKnownHostsFile=/dev/null
+      Host git.bemade.org
+        StrictHostKeyChecking no
+        UserKnownHostsFile=/dev/null
+      EOF
+      chmod 600 ~/.ssh/config
+      cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
+      chmod 600 ~/.ssh/github_key
+      eval $(ssh-agent -s)
+      ssh-add ~/.ssh/github_key
+      
+      # Clone submodules (needed for module detection)
+      git submodule update --init --recursive --recommend-shallow
+      
+      # Get odoo-ci scripts
+      git clone git@git.bemade.org:bemade/odoo-ci.git
+      
+      # Detect changed modules
+      echo "Detecting changed modules..."
+      CODEPENDS_FLAG=""
+      if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
+        CODEPENDS_FLAG="--include-codepends"
+      fi
+      
+      CHANGED_MODULES=$(python3 odoo-ci/scripts/detect_changed_modules.py \
+        --addons-dir ./addons \
+        --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
+        --head-ref "${CI_COMMIT_SHA:-HEAD}" \
+        --output comma \
+        --verbose \
+        $CODEPENDS_FLAG || echo "")
+      
+      if [ -z "$CHANGED_MODULES" ]; then
+        echo "No Odoo modules changed - skipping tests"
+        exit 0
+      fi
+      
+      echo "Modules to test: $CHANGED_MODULES"
+      
+      # Login to Docker registry
+      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
+      
+      # Pull the image we just built
+      docker pull "${CONTAINER_IMAGE}:latest"
+      
+      # Set test database name
+      TEST_DB="${TEST_DATABASE:-test_ci}"
+      
+      # Wait for PostgreSQL to be ready
+      echo "Waiting for PostgreSQL..."
+      for i in $(seq 1 30); do
+        if docker run --rm --network host postgres:15 pg_isready -h db -U odoo 2>/dev/null; then
+          echo "PostgreSQL is ready"
+          break
+        fi
+        sleep 1
+      done
+      
+      # Run Odoo tests
+      echo "Running tests for modules: $CHANGED_MODULES"
+      docker run --rm \
+        --network host \
+        -e DB_HOST=db \
+        -e DB_PORT=5432 \
+        -e DB_USER=odoo \
+        -e DB_PASSWORD=odoo \
+        "${CONTAINER_IMAGE}:latest" \
+        odoo \
+        --db_host=db \
+        --db_port=5432 \
+        --db_user=odoo \
+        --db_password=odoo \
+        --database="$TEST_DB" \
+        --init="$CHANGED_MODULES" \
+        --test-enable \
+        --stop-after-init \
+        --log-level=test
+      
+      echo "=== Tests completed successfully ==="
+  artifacts:
+    when: always
+    paths:
+      - test-results/
+    expire_in: 1 week
+  allow_failure: false
+
 # Deploy stage will only run if KUBECTL_NAMESPACE and ODOO_INSTANCE_NAME are defined
 deploy:
   stage: deploy
   image: bitnami/kubectl:latest
   tags: [kubernetes]
-  needs: ["build"]  # Ensure build job runs first
+  needs:
+    - job: build
+    - job: test
+      optional: true  # Test job may be skipped if TEST_ENABLED is not set
   dependencies:
-    - "build"  # Download artifacts from build job
+    - build
   rules:
     # Only deploy on staging branch when namespace and instance name are defined
     - if: $KUBECTL_NAMESPACE && $ODOO_INSTANCE_NAME && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
