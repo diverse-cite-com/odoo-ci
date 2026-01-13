@@ -158,17 +158,11 @@ test:
     - name: docker:20.10.16-dind
       alias: docker
       command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
-    - name: postgres:15
-      alias: db
   variables:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
     DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
-    # PostgreSQL configuration
-    POSTGRES_USER: odoo
-    POSTGRES_PASSWORD: odoo
-    POSTGRES_DB: postgres
   rules:
     # Only run tests if TEST_ENABLED is set
     - if: $TEST_ENABLED == "true" && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
@@ -242,27 +236,37 @@ test:
       # Set test database name
       TEST_DB="${TEST_DATABASE:-test_ci}"
       
+      # Create a Docker network for test containers
+      docker network create test-network || true
+      
+      # Start PostgreSQL container
+      echo "Starting PostgreSQL..."
+      docker run -d \
+        --name test-db \
+        --network test-network \
+        -e POSTGRES_USER=odoo \
+        -e POSTGRES_PASSWORD=odoo \
+        -e POSTGRES_DB=postgres \
+        postgres:15
+      
       # Wait for PostgreSQL to be ready
       echo "Waiting for PostgreSQL..."
       for i in $(seq 1 30); do
-        if docker run --rm --network host postgres:15 pg_isready -h db -U odoo 2>/dev/null; then
+        if docker exec test-db pg_isready -U odoo 2>/dev/null; then
           echo "PostgreSQL is ready"
           break
         fi
-        sleep 1
+        echo "  waiting... ($i/30)"
+        sleep 2
       done
       
       # Run Odoo tests
       echo "Running tests for modules: $CHANGED_MODULES"
       docker run --rm \
-        --network host \
-        -e DB_HOST=db \
-        -e DB_PORT=5432 \
-        -e DB_USER=odoo \
-        -e DB_PASSWORD=odoo \
+        --network test-network \
         "${CONTAINER_IMAGE}:latest" \
         odoo \
-        --db_host=db \
+        --db_host=test-db \
         --db_port=5432 \
         --db_user=odoo \
         --db_password=odoo \
@@ -271,6 +275,12 @@ test:
         --test-enable \
         --stop-after-init \
         --log-level=test
+      
+      # Cleanup
+      echo "Cleaning up..."
+      docker stop test-db || true
+      docker rm test-db || true
+      docker network rm test-network || true
       
       echo "=== Tests completed successfully ==="
   artifacts:
