@@ -44,5 +44,5 @@ USER odoo
 # Test image with pytest-odoo pre-installed
 FROM production as test
 USER root
-RUN pip install pytest-odoo
+RUN pip install $(cat /tmp/break_sys_packages) pytest-odoo
 USER odoo
