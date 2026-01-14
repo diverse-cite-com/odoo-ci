@@ -264,11 +264,10 @@ test:
       echo "Running tests for modules: $CHANGED_MODULES"
       docker run --rm \
         --network test-network \
-        -e PGHOST=test-db \
-        -e PGPORT=5432 \
-        -e PGUSER=odoo \
-        -e PGPASSWORD=odoo \
-        -e PGDATABASE="$TEST_DB" \
+        -e HOST=test-db \
+        -e PORT=5432 \
+        -e USER=odoo \
+        -e PASSWORD=odoo \
         "${CONTAINER_IMAGE}:latest" \
         odoo \
         -d "$TEST_DB" \
