@@ -239,7 +239,9 @@ test:
       # Create a Docker network for test containers
       docker network create test-network || true
       
-      # Start PostgreSQL container
+      # Start PostgreSQL container with settings for Odoo test suite
+      # - max_prepared_transactions: required for some tests
+      # - wal_level=replica: enables readonly connection support
       echo "Starting PostgreSQL..."
       docker run -d \
         --name test-db \
@@ -247,7 +249,9 @@ test:
         -e POSTGRES_USER=odoo \
         -e POSTGRES_PASSWORD=odoo \
         -e POSTGRES_DB=postgres \
-        postgres:15
+        postgres:15 \
+        -c max_prepared_transactions=100 \
+        -c wal_level=replica
       
       # Wait for PostgreSQL to be ready
       echo "Waiting for PostgreSQL..."
@@ -274,7 +278,9 @@ test:
         -i "$CHANGED_MODULES" \
         --test-enable \
         --stop-after-init \
-        --log-level=test
+        --addons-path="/mnt/extra-addons,/mnt/enterprise-addons,/usr/lib/python3/dist-packages/odoo/addons" \
+        --log-level=test \
+        --db_replica_host=test-db
       
       # Cleanup
       echo "Cleaning up..."
