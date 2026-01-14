@@ -129,26 +129,11 @@ build:
         --build-arg REGISTRY=${CI_REGISTRY} \
         -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
         -t "${CONTAINER_IMAGE}:latest" \
-        --target production \
-        .
-
-      # Build the test target with pytest-odoo
-      docker build \
-        -f "${dockerfile}" \
-        --build-arg ODOO_VERSION=${ODOO_VERSION} \
-        --build-arg REGISTRY=${CI_REGISTRY} \
-        -t "${CONTAINER_IMAGE}:${BUILD_DATE}-test" \
-        -t "${CONTAINER_IMAGE}:test" \
-        --target test \
         .
 
       # Push the production image with date and latest tags
       docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
       docker push "${CONTAINER_IMAGE}:latest" | tee push_output.txt
-
-      # Push the test image
-      docker push "${CONTAINER_IMAGE}:${BUILD_DATE}-test"
-      docker push "${CONTAINER_IMAGE}:test"
 
       grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
 
@@ -276,40 +261,21 @@ test:
       done
       
       # Run Odoo tests
-      # First, install modules without tests
-      echo "Installing modules: $CHANGED_MODULES"
+      echo "Running tests for modules: $CHANGED_MODULES"
       docker run --rm \
         --network test-network \
-        --entrypoint "" \
+        -e PGHOST=test-db \
+        -e PGPORT=5432 \
+        -e PGUSER=odoo \
+        -e PGPASSWORD=odoo \
+        -e PGDATABASE="$TEST_DB" \
         "${CONTAINER_IMAGE}:latest" \
-        /usr/bin/odoo \
-        --db_host=test-db \
-        --db_port=5432 \
-        --db_user=odoo \
-        --db_password=odoo \
-        --database="$TEST_DB" \
-        --addons-path="/mnt/extra-addons,/mnt/enterprise-addons,/usr/lib/python3/dist-packages/odoo/addons" \
-        --init="$CHANGED_MODULES" \
+        odoo \
+        -d "$TEST_DB" \
+        -i "$CHANGED_MODULES" \
+        --test-enable \
         --stop-after-init \
-        --log-level=error
-      
-      # Then run pytest-odoo for better reporting
-      echo "Running pytest-odoo for: $CHANGED_MODULES"
-      mkdir -p test-results
-      docker run --rm \
-        --network test-network \
-        -e HOST=test-db \
-        -e PORT=5432 \
-        -e USER=odoo \
-        -e PASSWORD=odoo \
-        -v "$(pwd)/test-results:/test-results" \
-        "${CONTAINER_IMAGE}:test" \
-        pytest \
-        --odoo-database="$TEST_DB" \
-        --odoo-log-level=test \
-        --junitxml=/test-results/junit.xml \
-        --verbose \
-        /mnt/extra-addons /mnt/enterprise-addons
+        --log-level=test
       
       # Cleanup
       echo "Cleaning up..."
