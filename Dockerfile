@@ -1,6 +1,6 @@
 ARG ODOO_VERSION=18.0
 ARG REGISTRY=registry.bemade.org:443
-FROM ${REGISTRY}/bemade/docker-odoo-enterprise/odoo-enterprise-${ODOO_VERSION}
+FROM ${REGISTRY}/bemade/docker-odoo-enterprise/odoo-enterprise-${ODOO_VERSION} as production
 
 USER 0
 
@@ -39,4 +39,10 @@ RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
       pip install $(cat /tmp/break_sys_packages) --ignore-installed typing-extensions -r /mnt/extra-addons/requirements.txt; \
     fi
 
+USER odoo
+
+# Test image with pytest-odoo pre-installed
+FROM production as test
+USER root
+RUN pip install pytest-odoo
 USER odoo
