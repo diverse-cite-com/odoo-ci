@@ -264,8 +264,12 @@ test:
       echo "Running tests for modules: $CHANGED_MODULES"
       docker run --rm \
         --network test-network \
+        -e HOST=test-db \
+        -e PORT=5432 \
+        -e USER=odoo \
+        -e PASSWORD=odoo \
         "${CONTAINER_IMAGE}:latest" \
-        odoo \
+        odoo-bin \
         --db_host=test-db \
         --db_port=5432 \
         --db_user=odoo \
@@ -274,7 +278,8 @@ test:
         --init="$CHANGED_MODULES" \
         --test-enable \
         --stop-after-init \
-        --log-level=test
+        --log-level=test \
+        --no-http
       
       # Cleanup
       echo "Cleaning up..."
