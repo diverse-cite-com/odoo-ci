@@ -129,11 +129,26 @@ build:
         --build-arg REGISTRY=${CI_REGISTRY} \
         -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
         -t "${CONTAINER_IMAGE}:latest" \
+        --target production \
         .
 
-      # Push the image with date and latest tags
+      # Build the test target with pytest-odoo
+      docker build \
+        -f "${dockerfile}" \
+        --build-arg ODOO_VERSION=${ODOO_VERSION} \
+        --build-arg REGISTRY=${CI_REGISTRY} \
+        -t "${CONTAINER_IMAGE}:${BUILD_DATE}-test" \
+        -t "${CONTAINER_IMAGE}:test" \
+        --target test \
+        .
+
+      # Push the production image with date and latest tags
       docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
       docker push "${CONTAINER_IMAGE}:latest" | tee push_output.txt
+
+      # Push the test image
+      docker push "${CONTAINER_IMAGE}:${BUILD_DATE}-test"
+      docker push "${CONTAINER_IMAGE}:test"
 
       grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
 
@@ -230,8 +245,8 @@ test:
       # Login to Docker registry
       echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
       
-      # Pull the image we just built
-      docker pull "${CONTAINER_IMAGE}:latest"
+      # Pull the test image
+      docker pull "${CONTAINER_IMAGE}:test"
       
       # Set test database name
       TEST_DB="${TEST_DATABASE:-test_ci}"
@@ -261,7 +276,8 @@ test:
       done
       
       # Run Odoo tests
-      echo "Running tests for modules: $CHANGED_MODULES"
+      # First, install modules without tests
+      echo "Installing modules: $CHANGED_MODULES"
       docker run --rm \
         --network test-network \
         --entrypoint "" \
@@ -274,10 +290,26 @@ test:
         --database="$TEST_DB" \
         --addons-path="/mnt/extra-addons,/mnt/enterprise-addons,/usr/lib/python3/dist-packages/odoo/addons" \
         --init="$CHANGED_MODULES" \
-        --test-enable \
         --stop-after-init \
-        --log-level=test \
-        --no-http
+        --log-level=error
+      
+      # Then run pytest-odoo for better reporting
+      echo "Running pytest-odoo for: $CHANGED_MODULES"
+      mkdir -p test-results
+      docker run --rm \
+        --network test-network \
+        -e HOST=test-db \
+        -e PORT=5432 \
+        -e USER=odoo \
+        -e PASSWORD=odoo \
+        -v "$(pwd)/test-results:/test-results" \
+        "${CONTAINER_IMAGE}:test" \
+        pytest \
+        --odoo-database="$TEST_DB" \
+        --odoo-log-level=test \
+        --junitxml=/test-results/junit.xml \
+        --verbose \
+        /mnt/extra-addons /mnt/enterprise-addons
       
       # Cleanup
       echo "Cleaning up..."
