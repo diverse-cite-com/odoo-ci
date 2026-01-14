@@ -261,23 +261,17 @@ test:
       done
       
       # Run Odoo tests
-      # Create a minimal odoo config for testing
-      cat > /tmp/odoo-test.conf << 'EOF'
-      [options]
-      db_host = test-db
-      db_port = 5432
-      db_user = odoo
-      db_password = odoo
-      addons_path = /mnt/extra-addons,/mnt/enterprise-addons,/usr/lib/python3/dist-packages/odoo/addons
-      EOF
-      
       echo "Running tests for modules: $CHANGED_MODULES"
       docker run --rm \
         --network test-network \
-        -v /tmp/odoo-test.conf:/etc/odoo/odoo.conf:ro \
         "${CONTAINER_IMAGE}:latest" \
         odoo \
+        --db_host=test-db \
+        --db_port=5432 \
+        --db_user=odoo \
+        --db_password=odoo \
         --database="$TEST_DB" \
+        --addons-path="/mnt/extra-addons,/mnt/enterprise-addons,/usr/lib/python3/dist-packages/odoo/addons" \
         --init="$CHANGED_MODULES" \
         --test-enable \
         --stop-after-init \
