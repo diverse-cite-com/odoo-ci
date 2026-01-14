@@ -41,11 +41,42 @@ def run_git_command(args: list[str], cwd: Optional[Path] = None) -> str:
 def get_changed_files(
     base_ref: str, head_ref: str, cwd: Optional[Path] = None
 ) -> list[str]:
-    """Get list of files changed between two git refs."""
+    """Get list of files changed between two git refs, including submodule changes."""
+    changed_files = []
+
+    # Get regular file changes
     output = run_git_command(["diff", "--name-only", base_ref, head_ref], cwd=cwd)
     if not output:
         # Fallback to comparing with previous commit
         output = run_git_command(["diff", "--name-only", "HEAD~1", "HEAD"], cwd=cwd)
+
+    if output:
+        changed_files.extend(output.split("\n"))
+
+    # Get submodule changes using --submodule=diff
+    # This shows actual file paths inside submodules
+    submodule_output = run_git_command(
+        ["diff", "--submodule=diff", base_ref, head_ref], cwd=cwd
+    )
+    if not submodule_output:
+        submodule_output = run_git_command(
+            ["diff", "--submodule=diff", "HEAD~1", "HEAD"], cwd=cwd
+        )
+
+    if submodule_output:
+        # Parse the submodule diff output to extract file paths
+        # Lines like: "diff --git a/.repos/bemade-addons/odoo_herd/__manifest__.py b/..."
+        for line in submodule_output.split("\n"):
+            if line.startswith("diff --git a/"):
+                # Extract the file path from "diff --git a/<path> b/<path>"
+                parts = line.split(" ")
+                if len(parts) >= 3:
+                    # Remove "a/" prefix
+                    file_path = parts[2][2:]
+                    if file_path and file_path not in changed_files:
+                        changed_files.append(file_path)
+
+    output = "\n".join(changed_files)
 
     if not output:
         return []

@@ -199,7 +199,13 @@ class TestGetChangedFiles:
     @patch("detect_changed_modules.run_git_command")
     def test_returns_file_list(self, mock_git):
         """Test parsing git diff output."""
-        mock_git.return_value = "addons/module1/file.py\naddons/module2/file.py"
+
+        def side_effect(args, cwd=None):
+            if "--submodule=diff" in args:
+                return ""
+            return "addons/module1/file.py\naddons/module2/file.py"
+
+        mock_git.side_effect = side_effect
 
         result = get_changed_files("HEAD~1", "HEAD")
 
@@ -217,11 +223,60 @@ class TestGetChangedFiles:
     @patch("detect_changed_modules.run_git_command")
     def test_filters_empty_lines(self, mock_git):
         """Test that empty lines are filtered out."""
-        mock_git.return_value = "file1.py\n\nfile2.py\n"
+
+        def side_effect(args, cwd=None):
+            if "--submodule=diff" in args:
+                return ""
+            return "file1.py\n\nfile2.py\n"
+
+        mock_git.side_effect = side_effect
 
         result = get_changed_files("HEAD~1", "HEAD")
 
         assert result == ["file1.py", "file2.py"]
+
+    @patch("detect_changed_modules.run_git_command")
+    def test_parses_submodule_diff(self, mock_git):
+        """Test parsing submodule diff output to extract file paths."""
+
+        def side_effect(args, cwd=None):
+            if "--submodule=diff" in args:
+                return """Submodule .repos/bemade-addons 8416794..980ac3b:
+diff --git a/.repos/bemade-addons/odoo_herd/__manifest__.py b/.repos/bemade-addons/odoo_herd/__manifest__.py
+index 699b338..a5cad92 100644
+--- a/.repos/bemade-addons/odoo_herd/__manifest__.py
++++ b/.repos/bemade-addons/odoo_herd/__manifest__.py
+@@ -1,6 +1,6 @@
+ {
+     "name": "Odoo Herd",
+-    "version": "19.0.1.2.0",
++    "version": "19.0.1.2.1",
+"""
+            return ".repos/bemade-addons"  # Regular diff just shows submodule changed
+
+        mock_git.side_effect = side_effect
+
+        result = get_changed_files("HEAD~1", "HEAD")
+
+        assert ".repos/bemade-addons/odoo_herd/__manifest__.py" in result
+
+    @patch("detect_changed_modules.run_git_command")
+    def test_combines_regular_and_submodule_changes(self, mock_git):
+        """Test that regular and submodule changes are combined."""
+
+        def side_effect(args, cwd=None):
+            if "--submodule=diff" in args:
+                return """Submodule .repos/bemade-addons 123..456:
+diff --git a/.repos/bemade-addons/module_a/file.py b/.repos/bemade-addons/module_a/file.py
+"""
+            return "addons/direct_module/file.py"
+
+        mock_git.side_effect = side_effect
+
+        result = get_changed_files("HEAD~1", "HEAD")
+
+        assert "addons/direct_module/file.py" in result
+        assert ".repos/bemade-addons/module_a/file.py" in result
 
 
 class TestDetectChangedModules:
