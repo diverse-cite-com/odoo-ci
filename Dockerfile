@@ -14,8 +14,6 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
          apt-get update && apt-get install -y --no-install-recommends \
            build-essential \
            python3-dev \
-           libcairo2-dev \
-           pkg-config \
            $BUILD_PKGS \
            $RUNTIME_PKGS \
          && rm -rf /var/lib/apt/lists/*; \
