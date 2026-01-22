@@ -264,13 +264,6 @@ test:
         sleep 2
       done
       
-      # Create odoo.conf with proper addons_path for testing
-      cat > /tmp/odoo-test.conf << EOF
-      [options]
-      addons_path = /mnt/extra-addons,/mnt/enterprise-addons,/usr/lib/python3/dist-packages/odoo/addons
-      data_dir = /var/lib/odoo
-      EOF
-      
       # Run Odoo tests
       echo "Running tests for modules: $CHANGED_MODULES"
       docker run --rm \
@@ -279,7 +272,6 @@ test:
         -e PORT=5432 \
         -e USER=odoo \
         -e PASSWORD=odoo \
-        -v /tmp/odoo-test.conf:/etc/odoo/odoo.conf:ro \
         "${CONTAINER_IMAGE}:latest" \
         odoo \
         -d "$TEST_DB" \
