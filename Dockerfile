@@ -20,15 +20,11 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
        fi \
     && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
 
-# Check if pip version is >= 23.0.0 and note whether we need to break system packages
-RUN if [ "$(pip --version | awk '{print $2}' | awk -F. '{ printf("%d%03d%03d\n", $1, $2, $3); }')" -ge "$(echo "23.0.0" | awk -F. '{ printf("%d%03d%03d\n", $1, $2, $3); }')" ]; then \
-        echo '--break-system-packages' > /tmp/break_sys_packages; \
-    else \
-        echo '' > /tmp/break_sys_packages; \
-    fi
+# Install uv for faster package management
+RUN pip install --break-system-packages uv
 
 # Install packages with appropriate flags
-RUN pip install $(cat /tmp/break_sys_packages) --upgrade pytz
+RUN uv pip install --system --break-system-packages --upgrade pytz
 
 COPY --chown=odoo:odoo ./addons /mnt/extra-addons
 
@@ -36,7 +32,7 @@ COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
 
 # Install requirements from file if present
 RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
-      pip install $(cat /tmp/break_sys_packages) --ignore-installed typing-extensions -r /mnt/extra-addons/requirements.txt; \
+      uv pip install --system --break-system-packages --reinstall typing-extensions -r /mnt/extra-addons/requirements.txt; \
     fi
 
 USER odoo
