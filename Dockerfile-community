@@ -13,12 +13,17 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
          apt-get update && apt-get install -y --no-install-recommends \
            $BUILD_PKGS \
            $RUNTIME_PKGS \
+           python3-dev \
+           libcairo2-dev \
+           pkg-config
+           build-essential
          && rm -rf /var/lib/apt/lists/*; \
        fi \
     && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
 
 # Install uv for faster package management
 RUN pip install --break-system-packages uv
+RUN uv pip install --system --break-system-packages rlPyCairo pdfminer.six
 
 COPY --chown=odoo:odoo ./addons /mnt/extra-addons
 COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
