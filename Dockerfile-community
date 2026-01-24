@@ -15,8 +15,8 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
            $RUNTIME_PKGS \
            python3-dev \
            libcairo2-dev \
-           pkg-config
-           build-essential
+           pkg-config \
+           build-essential \
          && rm -rf /var/lib/apt/lists/*; \
        fi \
     && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
