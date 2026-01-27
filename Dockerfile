@@ -1,7 +1,7 @@
 ARG ODOO_VERSION=18.0
 ARG REGISTRY=registry.bemade.org:443
 ARG BASE_IMAGE=odoo-enterprise
-FROM ${REGISTRY}/bemade/docker-odoo-enterprise/${BASE_IMAGE}:${ODOO_VERSION}
+FROM ${REGISTRY}/bemade/docker-odoo-enterprise/${BASE_IMAGE}-${ODOO_VERSION}:latest
 
 USER 0
 
