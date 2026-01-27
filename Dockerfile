@@ -1,7 +1,9 @@
 ARG ODOO_VERSION=18.0
 ARG REGISTRY=registry.bemade.org:443
-ARG BASE_IMAGE=odoo-enterprise
-FROM ${REGISTRY}/bemade/docker-odoo-enterprise/${BASE_IMAGE}-${ODOO_VERSION}:latest
+# For production: odoo-enterprise-19.0:latest
+# For CI: odoo-enterprise-ci:19.0
+ARG BASE_IMAGE_TAG=odoo-enterprise-${ODOO_VERSION}:latest
+FROM ${REGISTRY}/bemade/docker-odoo-enterprise/${BASE_IMAGE_TAG}
 
 USER 0
 

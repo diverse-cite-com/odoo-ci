@@ -64,12 +64,13 @@ BUILD_DATE=$(date +%Y-%m-%d)
 touch requirements.txt build-packages.txt runtime-packages.txt
 
 # Build the Docker image with date and latest tags
+# Production uses: odoo-enterprise-19.0:latest
 docker build \
   --no-cache \
   -f "${dockerfile}" \
   --build-arg ODOO_VERSION=${ODOO_VERSION} \
   --build-arg REGISTRY=${CI_REGISTRY} \
-  --build-arg BASE_IMAGE=odoo-enterprise \
+  --build-arg BASE_IMAGE_TAG="odoo-enterprise-${ODOO_VERSION}:latest" \
   -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
   -t "${CONTAINER_IMAGE}:latest" \
   .
@@ -83,12 +84,13 @@ grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
 # Build test image if testing is enabled
 if [ "$TEST_ENABLED" = "true" ]; then
   echo "Building test image..."
+  # CI uses: odoo-enterprise-ci:19.0
   docker build \
     --no-cache \
     -f "${dockerfile}" \
     --build-arg ODOO_VERSION=${ODOO_VERSION} \
     --build-arg REGISTRY=${CI_REGISTRY} \
-    --build-arg BASE_IMAGE=odoo-enterprise-ci \
+    --build-arg BASE_IMAGE_TAG="odoo-enterprise-ci:${ODOO_VERSION}" \
     -t "${CONTAINER_IMAGE}:test" \
     .
   docker push "${CONTAINER_IMAGE}:test"
