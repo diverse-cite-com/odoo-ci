@@ -13,25 +13,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== Odoo Module Testing ==="
 
-# Install manifestoo for co-dependency detection (if enabled)
-if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
-  pip install --no-cache-dir manifestoo || pip install --no-cache-dir --break-system-packages manifestoo || true
+# Read changed modules from build stage artifact
+if [ -f "${CI_PROJECT_DIR}/changed-modules.txt" ]; then
+  CHANGED_MODULES=$(cat "${CI_PROJECT_DIR}/changed-modules.txt")
+else
+  echo "ERROR: changed-modules.txt not found - build stage may have failed"
+  exit 1
 fi
-
-# Detect changed modules
-echo "Detecting changed modules..."
-CODEPENDS_FLAG=""
-if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
-  CODEPENDS_FLAG="--include-codepends"
-fi
-
-CHANGED_MODULES=$(python3 "${SCRIPT_DIR}/detect_changed_modules.py" \
-  --addons-dir /mnt/extra-addons \
-  --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
-  --head-ref "${CI_COMMIT_SHA:-HEAD}" \
-  --output comma \
-  --verbose \
-  $CODEPENDS_FLAG || echo "")
 
 if [ -z "$CHANGED_MODULES" ]; then
   echo "No Odoo modules changed - skipping tests"

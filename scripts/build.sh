@@ -94,4 +94,22 @@ if [ "$TEST_ENABLED" = "true" ]; then
     -t "${CONTAINER_IMAGE}:test" \
     .
   docker push "${CONTAINER_IMAGE}:test"
+
+  # Detect changed modules and save as artifact for test stage
+  echo "Detecting changed modules..."
+  CODEPENDS_FLAG=""
+  if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
+    CODEPENDS_FLAG="--include-codepends"
+    pip install --no-cache-dir manifestoo || true
+  fi
+
+  python3 "${SCRIPT_DIR}/detect_changed_modules.py" \
+    --addons-dir ./addons \
+    --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
+    --head-ref "${CI_COMMIT_SHA:-HEAD}" \
+    --output comma \
+    --verbose \
+    $CODEPENDS_FLAG > changed-modules.txt || echo "" > changed-modules.txt
+
+  echo "Changed modules: $(cat changed-modules.txt)"
 fi

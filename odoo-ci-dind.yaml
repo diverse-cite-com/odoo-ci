@@ -59,6 +59,7 @@ build:
   artifacts:
     paths:
       - image-digest.txt
+      - changed-modules.txt
     expire_in: 1 hour
 
 # Test stage - runs Odoo tests on changed modules
@@ -87,12 +88,57 @@ test:
     - if: $TEST_ENABLED == "true" && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: on_success
     - when: never
-  before_script:
-    - apt-get update -qq && apt-get install -qq -y git openssh-client >/dev/null
-    - *setup_ssh
-    - git clone --depth 1 -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
-    - bash /tmp/odoo-ci/scripts/test.sh
+    - |
+      set -e
+      echo "=== Odoo Module Testing ==="
+      
+      # Read changed modules from build stage artifact
+      if [ -f "changed-modules.txt" ]; then
+        CHANGED_MODULES=$(cat changed-modules.txt)
+      else
+        echo "ERROR: changed-modules.txt not found"
+        exit 1
+      fi
+      
+      if [ -z "$CHANGED_MODULES" ]; then
+        echo "No Odoo modules changed - skipping tests"
+        exit 0
+      fi
+      
+      echo "Modules to test: $CHANGED_MODULES"
+      
+      # Set test database name
+      TEST_DB="${TEST_DATABASE:-test_ci}"
+      
+      # Wait for PostgreSQL
+      echo "Waiting for PostgreSQL..."
+      for i in $(seq 1 30); do
+        if pg_isready -h "${PGHOST:-postgres}" -U "${PGUSER:-odoo}" 2>/dev/null; then
+          echo "PostgreSQL is ready"
+          break
+        fi
+        echo "  waiting... ($i/30)"
+        sleep 2
+      done
+      
+      # Run Odoo tests with coverage
+      echo "Running tests for modules: $CHANGED_MODULES"
+      coverage run --source="/mnt/extra-addons" --branch \
+        $(which odoo) \
+        -d "$TEST_DB" \
+        -i "$CHANGED_MODULES" \
+        --test-enable \
+        --stop-after-init \
+        --log-level=test
+      
+      # Generate coverage report
+      echo "=== Coverage Report ==="
+      coverage report
+      coverage xml -o coverage.xml
+      coverage html -d htmlcov
+      
+      echo "=== Tests completed successfully ==="
   coverage: '/TOTAL.*\s+(\d+%)/'
   artifacts:
     when: always
