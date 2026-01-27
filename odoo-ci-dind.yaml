@@ -2,12 +2,30 @@
 # Format: re2 regex, see https://github.com/google/re2 
 
 variables:
-  # Strip :443 from registry URL to match pull secret configuration
   CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-$CI_COMMIT_BRANCH"
+
 stages:
   - build
   - test
   - deploy
+
+# Reusable SSH setup for cloning odoo-ci and other repos
+.setup_ssh: &setup_ssh
+  - |
+    mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    cat > ~/.ssh/config << EOF
+    Host github.com
+      StrictHostKeyChecking no
+      UserKnownHostsFile=/dev/null
+    Host git.bemade.org
+      StrictHostKeyChecking no
+      UserKnownHostsFile=/dev/null
+    EOF
+    chmod 600 ~/.ssh/config
+    cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
+    chmod 600 ~/.ssh/github_key
+    eval $(ssh-agent -s)
+    ssh-add ~/.ssh/github_key
 
 workflow:
   rules:
@@ -28,131 +46,16 @@ build:
       alias: docker
       command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
   variables:
-    # When using dind service, we need to instruct docker to talk with it
     DOCKER_HOST: tcp://docker:2375
-    # These settings ensure docker can communicate with the dind service
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
-    # Pass registry credentials to Docker
     DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
+  before_script:
+    - apk add --no-cache git openssh-client bash shadow
+    - *setup_ssh
+    - git clone git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
-    - |
-      set -x
-
-      # Validate essential environment variables
-      if [ -z "$CI_REGISTRY" ] || [ -z "$CI_DEPLOY_USER" ] || [ -z "$CI_DEPLOY_PASSWORD" ]; then
-        echo "ERROR: Missing required Docker registry credentials"
-        exit 1
-      fi
-      
-      # Check docker is running or fail fast
-      docker image ls
-
-      # Login to Docker registry or fail fast
-      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
-      
-      # Install git and ssh
-      apk add --no-cache git openssh-client bash shadow
-
-      # Create a non-root user for better security
-      addgroup -g 1000 builder
-      adduser -D -u 1000 -G builder builder
-      mkdir -p /home/builder
-      chown -R builder:builder /home/builder
-
-      # Set up SSH for GitHub access
-      mkdir -p ~/.ssh
-      chmod 700 ~/.ssh
-
-      # Configure SSH to not verify host keys
-      cat > ~/.ssh/config << EOF
-      Host github.com
-        StrictHostKeyChecking no
-        UserKnownHostsFile=/dev/null
-
-      Host git.bemade.org
-        StrictHostKeyChecking no
-        UserKnownHostsFile=/dev/null
-      EOF
-      chmod 600 ~/.ssh/config
-
-      # Add the SSH key - copy from the CI/CD variable
-      cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
-      chmod 600 ~/.ssh/github_key
-      eval $(ssh-agent -s)
-      ssh-add ~/.ssh/github_key
-
-      # Clone submodules
-      git submodule update --init --recursive --recommend-shallow
-
-      # Get the standard dockerfile
-      git clone git@git.bemade.org:bemade/odoo-ci.git
-
-      # Determine which dockerfile to use
-      if [[ $COMMUNITY ]]; then
-        dockerfile="odoo-ci/Dockerfile-community"
-      else
-        dockerfile="odoo-ci/Dockerfile"
-      fi
-
-      # Prepare the build context
-      if [ -f ".odoo-deploy/odoo-ci/prepare-build.sh" ]; then
-        bash .odoo-deploy/odoo-ci/prepare-build.sh
-      fi
-
-      # Convert symlinks in ./addons to full folders
-      home="$(pwd)"
-      if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
-        mkdir -p ./addons-new \
-        && cd ./addons-new \
-        && find ../addons -type l \
-          -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
-      fi
-
-      cd "$home"
-      if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
-        mv -f ./addons-new/* ./addons/ \
-          && rm -rf addons-new
-      fi
-
-      # Set build date
-      BUILD_DATE=$(date +%Y-%m-%d)
-
-      # Ensure optional files exist (empty is fine, Dockerfile handles it)
-      touch requirements.txt build-packages.txt runtime-packages.txt
-
-      # Build the Docker image with date and latest tags
-      docker build \
-        --no-cache \
-        -f "${dockerfile}" \
-        --build-arg ODOO_VERSION=${ODOO_VERSION} \
-        --build-arg REGISTRY=${CI_REGISTRY} \
-        --build-arg BASE_IMAGE=odoo-enterprise \
-        -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
-        -t "${CONTAINER_IMAGE}:latest" \
-        .
-
-      # Push the production image with date and latest tags
-      docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
-      docker push "${CONTAINER_IMAGE}:latest" | tee push_output.txt
-
-      grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
-
-      # Build test image if testing is enabled
-      if [ "$TEST_ENABLED" = "true" ]; then
-        echo "Building test image..."
-        docker build \
-          --no-cache \
-          -f "${dockerfile}" \
-          --build-arg ODOO_VERSION=${ODOO_VERSION} \
-          --build-arg REGISTRY=${CI_REGISTRY} \
-          --build-arg BASE_IMAGE=odoo-enterprise-ci \
-          -t "${CONTAINER_IMAGE}:test" \
-          .
-        docker push "${CONTAINER_IMAGE}:test"
-      fi
-
-  # Save the image digest as an artifact for the deploy job
+    - bash /tmp/odoo-ci/scripts/build.sh
   artifacts:
     paths:
       - image-digest.txt
@@ -185,89 +88,10 @@ test:
       when: on_success
     - when: never
   before_script:
-    # Set up SSH for submodule access (needed for odoo-ci clone)
-    - mkdir -p ~/.ssh
-    - chmod 700 ~/.ssh
-    - |
-      cat > ~/.ssh/config << EOF
-      Host github.com
-        StrictHostKeyChecking no
-        UserKnownHostsFile=/dev/null
-      Host git.bemade.org
-        StrictHostKeyChecking no
-        UserKnownHostsFile=/dev/null
-      EOF
-    - chmod 600 ~/.ssh/config
-    - cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
-    - chmod 600 ~/.ssh/github_key
-    - eval $(ssh-agent -s)
-    - ssh-add ~/.ssh/github_key
-    # Get odoo-ci scripts for module detection
+    - *setup_ssh
     - git clone git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
-    - |
-      set -e
-      
-      echo "=== Odoo Module Testing ==="
-      
-      # Install manifestoo for co-dependency detection (if enabled)
-      if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
-        pip install --no-cache-dir manifestoo || true
-      fi
-      
-      # Detect changed modules
-      echo "Detecting changed modules..."
-      CODEPENDS_FLAG=""
-      if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
-        CODEPENDS_FLAG="--include-codepends"
-      fi
-      
-      CHANGED_MODULES=$(python3 /tmp/odoo-ci/scripts/detect_changed_modules.py \
-        --addons-dir /mnt/extra-addons \
-        --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
-        --head-ref "${CI_COMMIT_SHA:-HEAD}" \
-        --output comma \
-        --verbose \
-        $CODEPENDS_FLAG || echo "")
-      
-      if [ -z "$CHANGED_MODULES" ]; then
-        echo "No Odoo modules changed - skipping tests"
-        exit 0
-      fi
-      
-      echo "Modules to test: $CHANGED_MODULES"
-      
-      # Set test database name
-      TEST_DB="${TEST_DATABASE:-test_ci}"
-      
-      # Wait for PostgreSQL
-      echo "Waiting for PostgreSQL..."
-      for i in $(seq 1 30); do
-        if pg_isready -h postgres -U odoo 2>/dev/null; then
-          echo "PostgreSQL is ready"
-          break
-        fi
-        echo "  waiting... ($i/30)"
-        sleep 2
-      done
-      
-      # Run Odoo tests with coverage
-      echo "Running tests for modules: $CHANGED_MODULES"
-      coverage run --source="/mnt/extra-addons" --branch \
-        $(which odoo) \
-        -d "$TEST_DB" \
-        -i "$CHANGED_MODULES" \
-        --test-enable \
-        --stop-after-init \
-        --log-level=test
-      
-      # Generate coverage report
-      echo "=== Coverage Report ==="
-      coverage report
-      coverage xml -o coverage.xml
-      coverage html -d htmlcov
-      
-      echo "=== Tests completed successfully ==="
+    - bash /tmp/odoo-ci/scripts/test.sh
   coverage: '/TOTAL.*\s+(\d+%)/'
   artifacts:
     when: always
