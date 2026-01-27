@@ -151,7 +151,7 @@ build:
 test:
   stage: test
   tags: [kubernetes]
-  image: ${CI_REGISTRY}/bemade/docker-odoo-enterprise/odoo-${TEST_IMAGE_TYPE:-enterprise}-ci-${ODOO_VERSION}:latest
+  image: ${CI_REGISTRY}/bemade/docker-odoo-enterprise/odoo-${TEST_IMAGE_TYPE:-enterprise}-ci:${ODOO_VERSION}
   needs: ["build"]
   dependencies:
     - "build"
