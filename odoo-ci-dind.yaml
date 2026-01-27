@@ -127,6 +127,7 @@ build:
         -f "${dockerfile}" \
         --build-arg ODOO_VERSION=${ODOO_VERSION} \
         --build-arg REGISTRY=${CI_REGISTRY} \
+        --build-arg BASE_IMAGE=odoo-enterprise \
         -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
         -t "${CONTAINER_IMAGE}:latest" \
         .
@@ -137,21 +138,34 @@ build:
 
       grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
 
+      # Build test image if testing is enabled
+      if [ "$TEST_ENABLED" = "true" ]; then
+        echo "Building test image..."
+        docker build \
+          --no-cache \
+          -f "${dockerfile}" \
+          --build-arg ODOO_VERSION=${ODOO_VERSION} \
+          --build-arg REGISTRY=${CI_REGISTRY} \
+          --build-arg BASE_IMAGE=odoo-enterprise-ci \
+          -t "${CONTAINER_IMAGE}:test" \
+          .
+        docker push "${CONTAINER_IMAGE}:test"
+      fi
+
   # Save the image digest as an artifact for the deploy job
   artifacts:
     paths:
       - image-digest.txt
     expire_in: 1 hour
 
-# Test stage - runs Odoo tests on changed modules using OCA CI images
+# Test stage - runs Odoo tests on changed modules
 # Set TEST_ENABLED=true in your project's .gitlab-ci.yml to enable testing
 # Set TEST_INCLUDE_CODEPENDS=true to also test modules that depend on changed modules
 # Set TEST_DATABASE=<name> to specify test database name (default: test_ci)
-# Set TEST_IMAGE_TYPE=community to use community-ci image instead of enterprise-ci
 test:
   stage: test
   tags: [kubernetes]
-  image: ${CI_REGISTRY}/bemade/docker-odoo-enterprise/odoo-${TEST_IMAGE_TYPE:-enterprise}-ci:${ODOO_VERSION}
+  image: ${CONTAINER_IMAGE}:test
   needs: ["build"]
   dependencies:
     - "build"
@@ -166,14 +180,12 @@ test:
     PGUSER: odoo
     PGPASSWORD: odoo
     PGDATABASE: odoo
-    ADDONS_DIR: "./addons"
   rules:
-    # Only run tests if TEST_ENABLED is set
     - if: $TEST_ENABLED == "true" && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: on_success
     - when: never
   before_script:
-    # Set up SSH for submodule access
+    # Set up SSH for submodule access (needed for odoo-ci clone)
     - mkdir -p ~/.ssh
     - chmod 700 ~/.ssh
     - |
@@ -190,8 +202,6 @@ test:
     - chmod 600 ~/.ssh/github_key
     - eval $(ssh-agent -s)
     - ssh-add ~/.ssh/github_key
-    # Clone submodules (needed for module detection and testing)
-    - git submodule update --init --recursive --recommend-shallow
     # Get odoo-ci scripts for module detection
     - git clone git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
@@ -213,7 +223,7 @@ test:
       fi
       
       CHANGED_MODULES=$(python3 /tmp/odoo-ci/scripts/detect_changed_modules.py \
-        --addons-dir ./addons \
+        --addons-dir /mnt/extra-addons \
         --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
         --head-ref "${CI_COMMIT_SHA:-HEAD}" \
         --output comma \
@@ -241,20 +251,15 @@ test:
         sleep 2
       done
       
-      # Install addon dependencies
-      echo "Installing addon dependencies..."
-      oca_install_addons || true
-      
       # Run Odoo tests with coverage
       echo "Running tests for modules: $CHANGED_MODULES"
-      coverage run --source="${ADDONS_DIR}" --branch \
+      coverage run --source="/mnt/extra-addons" --branch \
         $(which odoo) \
         -d "$TEST_DB" \
         -i "$CHANGED_MODULES" \
         --test-enable \
         --stop-after-init \
-        --log-level=test \
-        --addons-path=/opt/odoo/addons,/mnt/enterprise-addons,./addons
+        --log-level=test
       
       # Generate coverage report
       echo "=== Coverage Report ==="
