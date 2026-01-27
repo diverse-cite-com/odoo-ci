@@ -29,13 +29,11 @@ RUN pip install --break-system-packages uv
 # Install packages with appropriate flags
 RUN uv pip install --system --break-system-packages --upgrade pytz
 
-COPY --chown=odoo:odoo ./addons /mnt/extra-addons
-
-COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
+# Copy addons
+COPY ./addons /mnt/extra-addons
+COPY requirements.txt /mnt/extra-addons/
 
 # Install requirements from file if present
 RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
       uv pip install --system --break-system-packages --reinstall typing-extensions -r /mnt/extra-addons/requirements.txt; \
     fi
-
-USER odoo
