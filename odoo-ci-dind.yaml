@@ -53,7 +53,7 @@ build:
   before_script:
     - apk add --no-cache git openssh-client bash shadow
     - *setup_ssh
-    - git clone git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
+    - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
     - bash /tmp/odoo-ci/scripts/build.sh
   artifacts:
@@ -89,7 +89,7 @@ test:
     - when: never
   before_script:
     - *setup_ssh
-    - git clone git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
+    - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
     - bash /tmp/odoo-ci/scripts/test.sh
   coverage: '/TOTAL.*\s+(\d+%)/'
