@@ -88,8 +88,9 @@ test:
       when: on_success
     - when: never
   before_script:
+    - apt-get update -qq && apt-get install -qq -y git openssh-client >/dev/null
     - *setup_ssh
-    - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
+    - git clone --depth 1 -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
     - bash /tmp/odoo-ci/scripts/test.sh
   coverage: '/TOTAL.*\s+(\d+%)/'
