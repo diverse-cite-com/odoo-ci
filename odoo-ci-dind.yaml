@@ -143,48 +143,40 @@ build:
       - image-digest.txt
     expire_in: 1 hour
 
-# Test stage - runs Odoo tests on changed modules
+# Test stage - runs Odoo tests on changed modules using OCA CI images
 # Set TEST_ENABLED=true in your project's .gitlab-ci.yml to enable testing
 # Set TEST_INCLUDE_CODEPENDS=true to also test modules that depend on changed modules
 # Set TEST_DATABASE=<name> to specify test database name (default: test_ci)
+# Set TEST_IMAGE_TYPE=community to use community-ci image instead of enterprise-ci
 test:
   stage: test
   tags: [kubernetes]
-  image: docker:20.10.16
+  image: ${CI_REGISTRY}/bemade/docker-odoo-enterprise/odoo-${TEST_IMAGE_TYPE:-enterprise}-ci-${ODOO_VERSION}:latest
   needs: ["build"]
   dependencies:
     - "build"
   services:
-    - name: docker:20.10.16-dind
-      alias: docker
-      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+    - name: postgres:16
+      alias: postgres
   variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_DRIVER: overlay2
-    DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
+    POSTGRES_USER: odoo
+    POSTGRES_PASSWORD: odoo
+    POSTGRES_DB: odoo
+    PGHOST: postgres
+    PGUSER: odoo
+    PGPASSWORD: odoo
+    PGDATABASE: odoo
+    ADDONS_DIR: "./addons"
   rules:
     # Only run tests if TEST_ENABLED is set
     - if: $TEST_ENABLED == "true" && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: on_success
     - when: never
-  script:
+  before_script:
+    # Set up SSH for submodule access
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
     - |
-      set -e
-      
-      echo "=== Odoo Module Testing ==="
-      
-      # Install dependencies
-      apk add --no-cache git openssh-client bash python3 py3-pip
-      
-      # Install manifestoo for co-dependency detection (if enabled)
-      if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
-        pip3 install --break-system-packages manifestoo || pip3 install manifestoo
-      fi
-      
-      # Set up SSH for submodule access
-      mkdir -p ~/.ssh
-      chmod 700 ~/.ssh
       cat > ~/.ssh/config << EOF
       Host github.com
         StrictHostKeyChecking no
@@ -193,17 +185,25 @@ test:
         StrictHostKeyChecking no
         UserKnownHostsFile=/dev/null
       EOF
-      chmod 600 ~/.ssh/config
-      cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
-      chmod 600 ~/.ssh/github_key
-      eval $(ssh-agent -s)
-      ssh-add ~/.ssh/github_key
+    - chmod 600 ~/.ssh/config
+    - cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
+    - chmod 600 ~/.ssh/github_key
+    - eval $(ssh-agent -s)
+    - ssh-add ~/.ssh/github_key
+    # Clone submodules (needed for module detection and testing)
+    - git submodule update --init --recursive --recommend-shallow
+    # Get odoo-ci scripts for module detection
+    - git clone git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
+  script:
+    - |
+      set -e
       
-      # Clone submodules (needed for module detection)
-      git submodule update --init --recursive --recommend-shallow
+      echo "=== Odoo Module Testing ==="
       
-      # Get odoo-ci scripts
-      git clone git@git.bemade.org:bemade/odoo-ci.git
+      # Install manifestoo for co-dependency detection (if enabled)
+      if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
+        pip install --no-cache-dir manifestoo || true
+      fi
       
       # Detect changed modules
       echo "Detecting changed modules..."
@@ -212,7 +212,7 @@ test:
         CODEPENDS_FLAG="--include-codepends"
       fi
       
-      CHANGED_MODULES=$(python3 odoo-ci/scripts/detect_changed_modules.py \
+      CHANGED_MODULES=$(python3 /tmp/odoo-ci/scripts/detect_changed_modules.py \
         --addons-dir ./addons \
         --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
         --head-ref "${CI_COMMIT_SHA:-HEAD}" \
@@ -227,36 +227,13 @@ test:
       
       echo "Modules to test: $CHANGED_MODULES"
       
-      # Login to Docker registry
-      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
-      
-      # Pull the test image
-      docker pull "${CONTAINER_IMAGE}:test"
-      
       # Set test database name
       TEST_DB="${TEST_DATABASE:-test_ci}"
       
-      # Create a Docker network for test containers
-      docker network create test-network || true
-      
-      # Start PostgreSQL container with settings for Odoo test suite
-      # - max_prepared_transactions: required for some tests
-      # - wal_level=replica: enables readonly connection support
-      echo "Starting PostgreSQL..."
-      docker run -d \
-        --name test-db \
-        --network test-network \
-        -e POSTGRES_USER=odoo \
-        -e POSTGRES_PASSWORD=odoo \
-        -e POSTGRES_DB=postgres \
-        postgres:15 \
-        -c max_prepared_transactions=100 \
-        -c wal_level=replica
-      
-      # Wait for PostgreSQL to be ready
+      # Wait for PostgreSQL
       echo "Waiting for PostgreSQL..."
       for i in $(seq 1 30); do
-        if docker exec test-db pg_isready -U odoo 2>/dev/null; then
+        if pg_isready -h postgres -U odoo 2>/dev/null; then
           echo "PostgreSQL is ready"
           break
         fi
@@ -264,34 +241,38 @@ test:
         sleep 2
       done
       
-      # Run Odoo tests
+      # Install addon dependencies
+      echo "Installing addon dependencies..."
+      oca_install_addons || true
+      
+      # Run Odoo tests with coverage
       echo "Running tests for modules: $CHANGED_MODULES"
-      docker run --rm \
-        --network test-network \
-        -e HOST=test-db \
-        -e PORT=5432 \
-        -e USER=odoo \
-        -e PASSWORD=odoo \
-        "${CONTAINER_IMAGE}:latest" \
-        odoo \
+      coverage run --source="${ADDONS_DIR}" --branch \
+        $(which odoo) \
         -d "$TEST_DB" \
         -i "$CHANGED_MODULES" \
         --test-enable \
         --stop-after-init \
         --log-level=test \
-        --db_replica_host=test-db
+        --addons-path=/opt/odoo/addons,/mnt/enterprise-addons,./addons
       
-      # Cleanup
-      echo "Cleaning up..."
-      docker stop test-db || true
-      docker rm test-db || true
-      docker network rm test-network || true
+      # Generate coverage report
+      echo "=== Coverage Report ==="
+      coverage report
+      coverage xml -o coverage.xml
+      coverage html -d htmlcov
       
       echo "=== Tests completed successfully ==="
+  coverage: '/TOTAL.*\s+(\d+%)/'
   artifacts:
     when: always
     paths:
-      - test-results/
+      - htmlcov/
+      - coverage.xml
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
     expire_in: 1 week
   allow_failure: false
 
