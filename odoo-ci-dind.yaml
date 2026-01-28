@@ -93,44 +93,32 @@ test:
       set -e
       echo "=== Odoo Module Testing ==="
       
-      # Read changed modules from build stage artifact
-      if [ -f "changed-modules.txt" ]; then
-        CHANGED_MODULES=$(cat changed-modules.txt)
-      else
-        echo "ERROR: changed-modules.txt not found"
-        exit 1
-      fi
+      # Use OCA approach: test all installable addons in extra-addons
+      ADDONS_DIR="/mnt/extra-addons"
       
-      if [ -z "$CHANGED_MODULES" ]; then
-        echo "No Odoo modules changed - skipping tests"
+      # List all installable addons using manifestoo
+      ADDONS=$(manifestoo --select-addons-dir ${ADDONS_DIR} list --separator=,)
+      
+      if [ -z "$ADDONS" ]; then
+        echo "No installable addons found - skipping tests"
         exit 0
       fi
       
-      echo "Modules to test: $CHANGED_MODULES"
-      
-      # Set test database name
-      TEST_DB="${TEST_DATABASE:-test_ci}"
+      echo "Addons to test: $ADDONS"
       
       # Wait for PostgreSQL
       echo "Waiting for PostgreSQL..."
-      for i in $(seq 1 30); do
-        if pg_isready -h "${PGHOST:-postgres}" -U "${PGUSER:-odoo}" 2>/dev/null; then
-          echo "PostgreSQL is ready"
-          break
-        fi
-        echo "  waiting... ($i/30)"
-        sleep 2
-      done
+      oca_wait_for_postgres
       
-      # Run Odoo tests with coverage
-      echo "Running tests for modules: $CHANGED_MODULES"
-      coverage run --source="/mnt/extra-addons" --branch \
+      # Run Odoo tests with coverage (OCA style)
+      echo "Running tests..."
+      unbuffer coverage run --include "${ADDONS_DIR}/*" --branch \
         $(which odoo) \
-        -d "$TEST_DB" \
-        -i "$CHANGED_MODULES" \
+        -d ${PGDATABASE} \
+        -i ${ADDONS} \
         --test-enable \
         --stop-after-init \
-        --log-level=test
+        --log-level=test | oca_checklog_odoo
       
       # Generate coverage report
       echo "=== Coverage Report ==="
