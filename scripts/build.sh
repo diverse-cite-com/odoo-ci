@@ -81,8 +81,8 @@ docker push "${CONTAINER_IMAGE}:latest" | tee push_output.txt
 
 grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
 
-# Build test image if testing is enabled
-if [ "$TEST_ENABLED" = "true" ]; then
+# Build test image if testing is enabled (TEST_BRANCHES or legacy TEST_ENABLED)
+if [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
   echo "Building test image..."
   # CI uses: odoo-enterprise-ci:19.0
   docker build \
