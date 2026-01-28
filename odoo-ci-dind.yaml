@@ -1,5 +1,9 @@
-# Set ALLOWED_BRANCHES in your project's .gitlab-ci.yml to specify which branches should trigger this workflow
-# Format: re2 regex, see https://github.com/google/re2 
+# Branch control variables (all are regex patterns):
+#   BUILD_BRANCHES - which branches trigger builds (falls back to ALLOWED_BRANCHES)
+#   TEST_BRANCHES  - which branches run tests (no fallback, unset = no tests)
+#   DEPLOY_BRANCHES - which branches can deploy (no fallback, unset = no deploy)
+#   ALLOWED_BRANCHES - legacy, used as fallback for BUILD_BRANCHES
+# Format: re2 regex, see https://github.com/google/re2
 
 variables:
   CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-$CI_COMMIT_BRANCH"
@@ -29,7 +33,10 @@ stages:
 
 workflow:
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
+    # Use BUILD_BRANCHES if set, otherwise fall back to ALLOWED_BRANCHES
+    - if: $BUILD_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $BUILD_BRANCHES
+      when: always
+    - if: $ALLOWED_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: always
     - when: never
 
@@ -38,7 +45,10 @@ build:
   tags: [kubernetes]
   image: docker:20.10.16
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
+    # Use BUILD_BRANCHES if set, otherwise fall back to ALLOWED_BRANCHES
+    - if: $BUILD_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $BUILD_BRANCHES
+      when: always
+    - if: $ALLOWED_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: always
     - when: never
   services:
@@ -65,10 +75,9 @@ build:
       - ci-scripts/
     expire_in: 1 hour
 
-# Test stage - runs Odoo tests on changed modules
-# Set TEST_ENABLED=true in your project's .gitlab-ci.yml to enable testing
-# Set TEST_INCLUDE_CODEPENDS=true to also test modules that depend on changed modules
-# Set TEST_DATABASE=<name> to specify test database name (default: test_ci)
+# Test stage - runs Odoo tests on modules
+# Set TEST_BRANCHES to a regex pattern of branches to test (e.g. "main|staging|19.0.*")
+# If TEST_BRANCHES is not set, tests are skipped
 test:
   stage: test
   tags: [kubernetes]
@@ -88,7 +97,7 @@ test:
     PGPASSWORD: odoo
     PGDATABASE: odoo
   rules:
-    - if: $TEST_ENABLED == "true" && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
+    - if: $TEST_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $TEST_BRANCHES
       when: on_success
     - when: never
   script:
@@ -170,7 +179,10 @@ test:
     expire_in: 1 week
   allow_failure: false
 
-# Deploy stage will only run if KUBECTL_NAMESPACE and ODOO_INSTANCE_NAME are defined
+# Deploy stage - requires DEPLOY_BRANCHES to match and deploy config to be set
+# Deploy config can come from:
+#   1. KUBECTL_NAMESPACE + ODOO_INSTANCE_NAME variables (simple single-target)
+#   2. .odoo-ci.yml config file (multi-target, branch-specific mappings)
 deploy:
   stage: deploy
   image: bitnami/kubectl:latest
@@ -178,23 +190,62 @@ deploy:
   needs:
     - job: build
     - job: test
-      optional: true  # Test job may be skipped if TEST_ENABLED is not set
+      optional: true  # Test job may be skipped if TEST_BRANCHES is not set
   dependencies:
     - build
   rules:
-    # Only deploy on staging branch when namespace and instance name are defined
-    - if: $KUBECTL_NAMESPACE && $ODOO_INSTANCE_NAME && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
+    # Use DEPLOY_BRANCHES if set
+    - if: $DEPLOY_BRANCHES && $CI_COMMIT_BRANCH =~ $DEPLOY_BRANCHES
+      when: on_success
+    # Legacy: fall back to STAGING_BRANCH for backwards compatibility
+    - if: $STAGING_BRANCH && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
       when: on_success
     # Default - don't deploy
     - when: never
+  before_script:
+    # Install yq for parsing deploy targets config
+    - |
+      if [ -n "$DEPLOY_TARGETS" ] || [ -f .odoo-ci.yml ]; then
+        curl -sSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
+        chmod +x /usr/local/bin/yq
+      fi
   script:
     - |
+      set -e
       CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
-      # Read the image digest from the file
       IMAGE_DIGEST=$(cat image-digest.txt)
-
-      # Patch the OdooInstance custom resource with the new image
-      kubectl patch odooinstance "${ODOO_INSTANCE_NAME}" \
-        --namespace "${KUBECTL_NAMESPACE}" \
+      
+      # Determine deploy target - check DEPLOY_TARGETS file variable first, then .odoo-ci.yml, then CI variables
+      # DEPLOY_TARGETS is a GitLab file variable containing the path to a YAML file
+      # Expected format:
+      # targets:
+      #   - branch-name:
+      #       namespace: k8s-namespace
+      #       instance: odoo-instance-name
+      CONFIG_FILE=""
+      if [ -n "$DEPLOY_TARGETS" ] && [ -f "$DEPLOY_TARGETS" ]; then
+        CONFIG_FILE="$DEPLOY_TARGETS"
+      elif [ -f .odoo-ci.yml ]; then
+        CONFIG_FILE=".odoo-ci.yml"
+      fi
+      
+      if [ -n "$CONFIG_FILE" ]; then
+        DEPLOY_NAMESPACE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].namespace // empty" "$CONFIG_FILE")
+        DEPLOY_INSTANCE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].instance // empty" "$CONFIG_FILE")
+      fi
+      
+      # Fall back to CI variables if config file didn't provide values
+      DEPLOY_NAMESPACE="${DEPLOY_NAMESPACE:-$KUBECTL_NAMESPACE}"
+      DEPLOY_INSTANCE="${DEPLOY_INSTANCE:-$ODOO_INSTANCE_NAME}"
+      
+      if [ -z "$DEPLOY_NAMESPACE" ] || [ -z "$DEPLOY_INSTANCE" ]; then
+        echo "ERROR: Deploy target not configured for branch ${CI_COMMIT_BRANCH}"
+        echo "Set KUBECTL_NAMESPACE/ODOO_INSTANCE_NAME variables or add to .odoo-ci.yml"
+        exit 1
+      fi
+      
+      echo "Deploying to ${DEPLOY_NAMESPACE}/${DEPLOY_INSTANCE}"
+      kubectl patch odooinstance "${DEPLOY_INSTANCE}" \
+        --namespace "${DEPLOY_NAMESPACE}" \
         --type merge \
         --patch "{\"spec\":{\"image\":\"${CONTAINER_IMAGE}@${IMAGE_DIGEST}\"}}"
