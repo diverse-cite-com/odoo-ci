@@ -56,10 +56,13 @@ build:
     - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
     - bash /tmp/odoo-ci/scripts/build.sh
+    # Copy CI scripts for use in test stage
+    - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py ci-scripts/
   artifacts:
     paths:
       - image-digest.txt
       - changed-modules.txt
+      - ci-scripts/
     expire_in: 1 hour
 
 # Test stage - runs Odoo tests on changed modules
@@ -143,6 +146,14 @@ test:
       coverage html -d htmlcov
       
       echo "=== Tests completed successfully ==="
+  after_script:
+    # Generate JUnit XML report from test log (script passed as artifact from build)
+    - |
+      if [ -f ci-scripts/odoo_log_to_junit.py ] && [ -f test-output.log ]; then
+        python3 ci-scripts/odoo_log_to_junit.py test-output.log -o junit-report.xml
+      else
+        echo "JUnit report generation skipped - script or log not available"
+      fi
   coverage: '/TOTAL.*\s+(\d+%)/'
   artifacts:
     when: always
@@ -150,10 +161,12 @@ test:
       - htmlcov/
       - coverage.xml
       - test-output.log
+      - junit-report.xml
     reports:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+      junit: junit-report.xml
     expire_in: 1 week
   allow_failure: false
 
