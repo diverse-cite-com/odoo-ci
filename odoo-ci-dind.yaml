@@ -111,18 +111,19 @@ test:
       oca_wait_for_postgres
       
       # Run Odoo tests with coverage (OCA style)
-      echo "Running tests..."
+      # Redirect to file to avoid GitLab log limit, tee summary to stdout
+      echo "Running tests (full log in test-output.log)..."
       unbuffer coverage run --include "${ADDONS_DIR}/*" --branch \
         $(which odoo) \
         -d ${PGDATABASE} \
         -i ${ADDONS} \
         --test-enable \
         --stop-after-init \
-        --log-level=test | oca_checklog_odoo
+        --log-level=test 2>&1 | tee test-output.log | oca_checklog_odoo
       
       # Generate coverage report
       echo "=== Coverage Report ==="
-      coverage report
+      coverage report | tee -a test-output.log
       coverage xml -o coverage.xml
       coverage html -d htmlcov
       
@@ -133,6 +134,7 @@ test:
     paths:
       - htmlcov/
       - coverage.xml
+      - test-output.log
     reports:
       coverage_report:
         coverage_format: cobertura
