@@ -4,15 +4,34 @@ Shared GitLab CI/CD pipeline for building, testing, and deploying Odoo applicati
 
 ## Quick Start
 
+### Minimal Setup
+
 Include this pipeline in your project's `.gitlab-ci.yml`:
 
 ```yaml
+include:
+  - project: 'bemade/odoo-ci'
+    ref: 'main'
+    file: 'odoo-ci-dind.yaml'
+```
+
+Then configure via **GitLab Project Variables** (Settings > CI/CD > Variables):
+
+| Variable | Example | Description |
+|----------|---------|-------------|
+| `ODOO_VERSION` | `19.0` | Odoo version for base image |
+| `BUILD_BRANCHES` | `19.0\|19.0-staging` | Regex: which branches trigger builds |
+| `TEST_BRANCHES` | `19.0\|19.0-staging` | Regex: which branches run tests |
+| `DEPLOY_BRANCHES` | `19.0` | Regex: which branches can deploy |
+| `DEPLOY_TARGETS` | *(file variable)* | YAML mapping branches to k8s targets |
+
+### Legacy Setup (Backwards Compatible)
+
+```yaml
 variables:
-  ODOO_VERSION: "18.0"
-  ALLOWED_BRANCHES: "18.0"
-  # Enable testing (optional)
-  TEST_ENABLED: "true"
-  TEST_INCLUDE_CODEPENDS: "true"
+  ODOO_VERSION: "19.0"
+  ALLOWED_BRANCHES: "19.0|19.0-staging"  # Falls back from BUILD_BRANCHES
+  STAGING_BRANCH: "19.0-staging"          # Falls back from DEPLOY_BRANCHES
 
 include:
   - project: 'bemade/odoo-ci'
@@ -24,53 +43,70 @@ include:
 
 ### 1. Build Stage
 
-Builds a Docker image with your Odoo addons based on the enterprise base image.
+Builds Docker images with your Odoo addons based on the enterprise base image.
 
-**Always runs** on allowed branches.
+**Runs when:** `BUILD_BRANCHES` matches (or `ALLOWED_BRANCHES` fallback)
 
-### 2. Test Stage (Optional)
+**Produces:**
+- Production image: `${CI_REGISTRY_IMAGE}/odoo-${BRANCH}:latest`
+- Test image: `${CI_REGISTRY_IMAGE}/odoo-${BRANCH}:test`
 
-Runs Odoo tests on modules that have changed since the last commit.
+### 2. Test Stage
 
-**Configuration Variables:**
+Runs Odoo tests on all installable modules in `/mnt/extra-addons`.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TEST_ENABLED` | `false` | Set to `"true"` to enable testing |
-| `TEST_INCLUDE_CODEPENDS` | `false` | Set to `"true"` to also test modules that depend on changed modules |
-| `TEST_DATABASE` | `test_ci` | Name of the test database |
+**Runs when:** `TEST_BRANCHES` matches current branch
 
-**How it works:**
+**Features:**
+- OCA two-step testing: installs dependencies first (without tests), then runs your addon tests
+- Coverage reports (Cobertura XML + HTML)
+- JUnit XML test reports for GitLab UI integration
 
-1. Detects which modules changed using `git diff`
-2. Handles both direct modules in `addons/` and symlinked modules from `.repos/`
-3. Optionally finds co-dependent modules using [manifestoo](https://github.com/acsone/manifestoo)
-4. Runs `odoo --init=<modules> --test-enable --stop-after-init`
+### 3. Deploy Stage
 
-### 3. Deploy Stage (Optional)
+Deploys the built image to Kubernetes by patching an OdooInstance CRD.
 
-Deploys the built image to a Kubernetes cluster by patching an OdooInstance CRD.
+**Runs when:** `DEPLOY_BRANCHES` matches (or `STAGING_BRANCH` fallback)
 
-**Configuration Variables:**
+**Deploy Target Configuration (choose one):**
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `KUBECTL_NAMESPACE` | Yes | Kubernetes namespace |
-| `ODOO_INSTANCE_NAME` | Yes | Name of the OdooInstance resource |
-| `STAGING_BRANCH` | Yes | Branch that triggers deployment |
+#### Option 1: DEPLOY_TARGETS File Variable (Recommended)
 
-## Module Detection
+Create a GitLab **file variable** named `DEPLOY_TARGETS` with YAML content:
 
-The test stage automatically detects which Odoo modules have changed:
+```yaml
+targets:
+  - 19.0-staging:
+      namespace: bemade
+      instance: bemade-staging
+  - 19.0:
+      namespace: bemade
+      instance: bemade-prod
+```
 
-### Direct Modules
-Changes in `addons/<module_name>/` are detected directly.
+#### Option 2: Simple CI Variables
 
-### Symlinked Modules
-Changes in `.repos/<submodule>/<module_name>/` are detected if the module is symlinked in `addons/`.
+For single-target deployments:
 
-### Co-dependencies
-With `TEST_INCLUDE_CODEPENDS=true`, modules that depend on changed modules are also tested. This uses the [manifestoo](https://github.com/acsone/manifestoo) tool.
+| Variable | Description |
+|----------|-------------|
+| `KUBECTL_NAMESPACE` | Kubernetes namespace |
+| `ODOO_INSTANCE_NAME` | Name of the OdooInstance resource |
+
+## Testing Approach
+
+The test stage uses the **OCA two-step testing approach**:
+
+1. **Install dependencies** without `--test-enable` (so their tests don't run)
+2. **Install your addons** with `--test-enable` (only your tests run)
+
+This ensures you only see test results for your own code, not upstream dependencies.
+
+**Test artifacts:**
+- `test-output.log` - Full Odoo test output
+- `coverage.xml` - Cobertura coverage report
+- `htmlcov/` - HTML coverage report
+- `junit-report.xml` - JUnit test report for GitLab UI
 
 ## Project Structure
 
@@ -97,53 +133,68 @@ your-project/
 | File | Description |
 |------|-------------|
 | `odoo-ci-dind.yaml` | Main CI/CD pipeline definition |
-| `Dockerfile` | Enterprise Odoo image with addons |
-| `Dockerfile-community` | Community Odoo image with addons |
-| `Dockerfile-test` | Extended image with testing tools |
-| `scripts/detect_changed_modules.py` | Module detection script |
-| `scripts/test_detect_changed_modules.py` | Unit tests for detection script |
+| `Dockerfile` | Client Odoo image with addons |
+| `Dockerfile-community` | Community Odoo image (legacy) |
+| `scripts/build.sh` | Docker image build script |
+| `scripts/odoo_log_to_junit.py` | Converts Odoo test logs to JUnit XML |
+| `test-local.sh` | Local testing script for CI images |
 
 ## CI/CD Variables
 
-Set these in your GitLab project settings:
+### Required Variables
 
-| Variable | Description |
-|----------|-------------|
-| `SSH_KEY_GITHUB` | SSH key file for accessing private repos |
-| `CI_DEPLOY_USER` | Docker registry username |
-| `CI_DEPLOY_PASSWORD` | Docker registry password |
+Set these in your GitLab project settings (Settings > CI/CD > Variables):
 
-## Local Development
+| Variable | Type | Description |
+|----------|------|-------------|
+| `SSH_KEY_GITHUB` | File | SSH key for accessing private repos |
+| `CI_DEPLOY_USER` | Variable | Docker registry username |
+| `CI_DEPLOY_PASSWORD` | Variable | Docker registry password (masked) |
 
-### Running Module Detection Locally
+### Branch Control Variables
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `BUILD_BRANCHES` | Variable | Regex: branches that trigger builds |
+| `TEST_BRANCHES` | Variable | Regex: branches that run tests |
+| `DEPLOY_BRANCHES` | Variable | Regex: branches that can deploy |
+| `DEPLOY_TARGETS` | File | YAML mapping branches to k8s targets |
+
+### Optional Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ODOO_VERSION` | `18.0` | Odoo version for base image |
+| `ODOO_CI_REF` | `main` | Branch of odoo-ci repo to use |
+
+## Local Testing
+
+Test CI images locally without consuming GitLab CI resources:
 
 ```bash
-# Detect changed modules
-python scripts/detect_changed_modules.py \
-  --addons-dir ./addons \
-  --base-ref origin/main \
-  --head-ref HEAD \
-  --verbose
+# Test community-ci image
+./test-local.sh community
 
-# Include co-dependencies (requires manifestoo)
-pip install manifestoo
-python scripts/detect_changed_modules.py \
-  --addons-dir ./addons \
-  --include-codepends \
-  --verbose
+# Test enterprise-ci image
+./test-local.sh enterprise
+
+# Test with parallel workers
+./test-local.sh enterprise --parallel 4
+
+# Test a specific client image
+./test-local.sh bemade
 ```
 
-### Running Tests
+## Scripts
+
+### odoo_log_to_junit.py
+
+Converts Odoo test output to JUnit XML format for GitLab UI integration:
 
 ```bash
-cd scripts
-pip install pytest
-pytest test_detect_changed_modules.py -v
+python scripts/odoo_log_to_junit.py test-output.log -o junit-report.xml
 ```
 
-## Future Enhancements
+### build.sh
 
-- **Upgrade workflow**: Run `odoo -u <modules>` to verify upgrade scripts
-- **Coverage reports**: Generate test coverage reports
-- **Parallel testing**: Split tests across multiple jobs
-- **MR testing**: Run tests on merge requests before merging
+Builds production and test Docker images. Called by the CI pipeline.

@@ -1,6 +1,9 @@
 ARG ODOO_VERSION=18.0
 ARG REGISTRY=registry.bemade.org:443
-FROM ${REGISTRY}/bemade/docker-odoo-enterprise/odoo-enterprise-${ODOO_VERSION}
+# For production: odoo-enterprise-19.0:latest
+# For CI: odoo-enterprise-ci:19.0
+ARG BASE_IMAGE_TAG=odoo-enterprise-${ODOO_VERSION}:latest
+FROM ${REGISTRY}/bemade/docker-odoo-enterprise/${BASE_IMAGE_TAG}
 
 USER 0
 
@@ -20,19 +23,23 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
        fi \
     && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
 
-# Install uv for faster package management
-RUN pip install --break-system-packages uv
-
-# Install packages with appropriate flags
-RUN uv pip install --system --break-system-packages --upgrade pytz
-
-COPY --chown=odoo:odoo ./addons /mnt/extra-addons
-
-COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
-
-# Install requirements from file if present
-RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
-      uv pip install --system --break-system-packages --reinstall typing-extensions -r /mnt/extra-addons/requirements.txt; \
+# Install uv for faster package management (to venv if CI image, else system)
+RUN if [ -d /opt/odoo-venv ]; then \
+      /opt/odoo-venv/bin/pip install uv; \
+    else \
+      pip install --break-system-packages uv; \
     fi
 
-USER odoo
+# Copy addons
+COPY ./addons /mnt/extra-addons
+COPY requirements.txt /mnt/extra-addons/
+
+# Install requirements from file if present
+# Use uv with venv for CI images, system for production
+RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
+      if [ -d /opt/odoo-venv ]; then \
+        uv pip install --python /opt/odoo-venv/bin/python -r /mnt/extra-addons/requirements.txt; \
+      else \
+        uv pip install --system --break-system-packages -r /mnt/extra-addons/requirements.txt; \
+      fi \
+    fi

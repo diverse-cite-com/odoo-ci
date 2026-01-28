@@ -1,17 +1,42 @@
-# Set ALLOWED_BRANCHES in your project's .gitlab-ci.yml to specify which branches should trigger this workflow
-# Format: re2 regex, see https://github.com/google/re2 
+# Branch control variables (all are regex patterns):
+#   BUILD_BRANCHES - which branches trigger builds (falls back to ALLOWED_BRANCHES)
+#   TEST_BRANCHES  - which branches run tests (no fallback, unset = no tests)
+#   DEPLOY_BRANCHES - which branches can deploy (no fallback, unset = no deploy)
+#   ALLOWED_BRANCHES - legacy, used as fallback for BUILD_BRANCHES
+# Format: re2 regex, see https://github.com/google/re2
 
 variables:
-  # Strip :443 from registry URL to match pull secret configuration
   CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-$CI_COMMIT_BRANCH"
+
 stages:
   - build
   - test
   - deploy
 
+# Reusable SSH setup for cloning odoo-ci and other repos
+.setup_ssh: &setup_ssh
+  - |
+    mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    cat > ~/.ssh/config << EOF
+    Host github.com
+      StrictHostKeyChecking no
+      UserKnownHostsFile=/dev/null
+    Host git.bemade.org
+      StrictHostKeyChecking no
+      UserKnownHostsFile=/dev/null
+    EOF
+    chmod 600 ~/.ssh/config
+    cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
+    chmod 600 ~/.ssh/github_key
+    eval $(ssh-agent -s)
+    ssh-add ~/.ssh/github_key
+
 workflow:
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
+    # Use BUILD_BRANCHES if set, otherwise fall back to ALLOWED_BRANCHES
+    - if: $BUILD_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $BUILD_BRANCHES
+      when: always
+    - if: $ALLOWED_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: always
     - when: never
 
@@ -20,7 +45,10 @@ build:
   tags: [kubernetes]
   image: docker:20.10.16
   rules:
-    - if: $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
+    # Use BUILD_BRANCHES if set, otherwise fall back to ALLOWED_BRANCHES
+    - if: $BUILD_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $BUILD_BRANCHES
+      when: always
+    - if: $ALLOWED_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: always
     - when: never
   services:
@@ -28,274 +56,133 @@ build:
       alias: docker
       command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
   variables:
-    # When using dind service, we need to instruct docker to talk with it
     DOCKER_HOST: tcp://docker:2375
-    # These settings ensure docker can communicate with the dind service
     DOCKER_TLS_CERTDIR: ""
     DOCKER_DRIVER: overlay2
-    # Pass registry credentials to Docker
     DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
+  before_script:
+    - apk add --no-cache git openssh-client bash shadow
+    - *setup_ssh
+    - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
-    - |
-      set -x
-
-      # Validate essential environment variables
-      if [ -z "$CI_REGISTRY" ] || [ -z "$CI_DEPLOY_USER" ] || [ -z "$CI_DEPLOY_PASSWORD" ]; then
-        echo "ERROR: Missing required Docker registry credentials"
-        exit 1
-      fi
-      
-      # Check docker is running or fail fast
-      docker image ls
-
-      # Login to Docker registry or fail fast
-      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
-      
-      # Install git and ssh
-      apk add --no-cache git openssh-client bash shadow
-
-      # Create a non-root user for better security
-      addgroup -g 1000 builder
-      adduser -D -u 1000 -G builder builder
-      mkdir -p /home/builder
-      chown -R builder:builder /home/builder
-
-      # Set up SSH for GitHub access
-      mkdir -p ~/.ssh
-      chmod 700 ~/.ssh
-
-      # Configure SSH to not verify host keys
-      cat > ~/.ssh/config << EOF
-      Host github.com
-        StrictHostKeyChecking no
-        UserKnownHostsFile=/dev/null
-
-      Host git.bemade.org
-        StrictHostKeyChecking no
-        UserKnownHostsFile=/dev/null
-      EOF
-      chmod 600 ~/.ssh/config
-
-      # Add the SSH key - copy from the CI/CD variable
-      cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
-      chmod 600 ~/.ssh/github_key
-      eval $(ssh-agent -s)
-      ssh-add ~/.ssh/github_key
-
-      # Clone submodules
-      git submodule update --init --recursive --recommend-shallow
-
-      # Get the standard dockerfile
-      git clone git@git.bemade.org:bemade/odoo-ci.git
-
-      # Determine which dockerfile to use
-      if [[ $COMMUNITY ]]; then
-        dockerfile="odoo-ci/Dockerfile-community"
-      else
-        dockerfile="odoo-ci/Dockerfile"
-      fi
-
-      # Prepare the build context
-      if [ -f ".odoo-deploy/odoo-ci/prepare-build.sh" ]; then
-        bash .odoo-deploy/odoo-ci/prepare-build.sh
-      fi
-
-      # Convert symlinks in ./addons to full folders
-      home="$(pwd)"
-      if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
-        mkdir -p ./addons-new \
-        && cd ./addons-new \
-        && find ../addons -type l \
-          -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
-      fi
-
-      cd "$home"
-      if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
-        mv -f ./addons-new/* ./addons/ \
-          && rm -rf addons-new
-      fi
-
-      # Set build date
-      BUILD_DATE=$(date +%Y-%m-%d)
-
-      # Ensure optional files exist (empty is fine, Dockerfile handles it)
-      touch requirements.txt build-packages.txt runtime-packages.txt
-
-      # Build the Docker image with date and latest tags
-      docker build \
-        --no-cache \
-        -f "${dockerfile}" \
-        --build-arg ODOO_VERSION=${ODOO_VERSION} \
-        --build-arg REGISTRY=${CI_REGISTRY} \
-        -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
-        -t "${CONTAINER_IMAGE}:latest" \
-        .
-
-      # Push the production image with date and latest tags
-      docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
-      docker push "${CONTAINER_IMAGE}:latest" | tee push_output.txt
-
-      grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
-
-  # Save the image digest as an artifact for the deploy job
+    - bash /tmp/odoo-ci/scripts/build.sh
+    # Copy CI scripts for use in test stage
+    - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py ci-scripts/
   artifacts:
     paths:
       - image-digest.txt
+      - changed-modules.txt
+      - ci-scripts/
     expire_in: 1 hour
 
-# Test stage - runs Odoo tests on changed modules
-# Set TEST_ENABLED=true in your project's .gitlab-ci.yml to enable testing
-# Set TEST_INCLUDE_CODEPENDS=true to also test modules that depend on changed modules
-# Set TEST_DATABASE=<name> to specify test database name (default: test_ci)
+# Test stage - runs Odoo tests on modules
+# Set TEST_BRANCHES to a regex pattern of branches to test (e.g. "main|staging|19.0.*")
+# If TEST_BRANCHES is not set, tests are skipped
 test:
   stage: test
   tags: [kubernetes]
-  image: docker:20.10.16
+  image: ${CONTAINER_IMAGE}:test
   needs: ["build"]
   dependencies:
     - "build"
   services:
-    - name: docker:20.10.16-dind
-      alias: docker
-      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+    - name: postgres:16
+      alias: postgres
   variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_DRIVER: overlay2
-    DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
+    POSTGRES_USER: odoo
+    POSTGRES_PASSWORD: odoo
+    POSTGRES_DB: odoo
+    PGHOST: postgres
+    PGUSER: odoo
+    PGPASSWORD: odoo
+    PGDATABASE: odoo
   rules:
-    # Only run tests if TEST_ENABLED is set
-    - if: $TEST_ENABLED == "true" && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
+    - if: $TEST_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $TEST_BRANCHES
       when: on_success
     - when: never
   script:
     - |
       set -e
-      
       echo "=== Odoo Module Testing ==="
       
-      # Install dependencies
-      apk add --no-cache git openssh-client bash python3 py3-pip
+      # Use OCA approach: test all installable addons in extra-addons
+      ADDONS_DIR="/mnt/extra-addons"
       
-      # Install manifestoo for co-dependency detection (if enabled)
-      if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
-        pip3 install --break-system-packages manifestoo || pip3 install manifestoo
-      fi
+      # List all installable addons using manifestoo
+      ADDONS=$(manifestoo --select-addons-dir ${ADDONS_DIR} list --separator=,)
       
-      # Set up SSH for submodule access
-      mkdir -p ~/.ssh
-      chmod 700 ~/.ssh
-      cat > ~/.ssh/config << EOF
-      Host github.com
-        StrictHostKeyChecking no
-        UserKnownHostsFile=/dev/null
-      Host git.bemade.org
-        StrictHostKeyChecking no
-        UserKnownHostsFile=/dev/null
-      EOF
-      chmod 600 ~/.ssh/config
-      cp "$SSH_KEY_GITHUB" ~/.ssh/github_key
-      chmod 600 ~/.ssh/github_key
-      eval $(ssh-agent -s)
-      ssh-add ~/.ssh/github_key
-      
-      # Clone submodules (needed for module detection)
-      git submodule update --init --recursive --recommend-shallow
-      
-      # Get odoo-ci scripts
-      git clone git@git.bemade.org:bemade/odoo-ci.git
-      
-      # Detect changed modules
-      echo "Detecting changed modules..."
-      CODEPENDS_FLAG=""
-      if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
-        CODEPENDS_FLAG="--include-codepends"
-      fi
-      
-      CHANGED_MODULES=$(python3 odoo-ci/scripts/detect_changed_modules.py \
-        --addons-dir ./addons \
-        --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
-        --head-ref "${CI_COMMIT_SHA:-HEAD}" \
-        --output comma \
-        --verbose \
-        $CODEPENDS_FLAG || echo "")
-      
-      if [ -z "$CHANGED_MODULES" ]; then
-        echo "No Odoo modules changed - skipping tests"
+      if [ -z "$ADDONS" ]; then
+        echo "No installable addons found - skipping tests"
         exit 0
       fi
       
-      echo "Modules to test: $CHANGED_MODULES"
+      echo "Addons to test: $ADDONS"
       
-      # Login to Docker registry
-      echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
-      
-      # Pull the test image
-      docker pull "${CONTAINER_IMAGE}:test"
-      
-      # Set test database name
-      TEST_DB="${TEST_DATABASE:-test_ci}"
-      
-      # Create a Docker network for test containers
-      docker network create test-network || true
-      
-      # Start PostgreSQL container with settings for Odoo test suite
-      # - max_prepared_transactions: required for some tests
-      # - wal_level=replica: enables readonly connection support
-      echo "Starting PostgreSQL..."
-      docker run -d \
-        --name test-db \
-        --network test-network \
-        -e POSTGRES_USER=odoo \
-        -e POSTGRES_PASSWORD=odoo \
-        -e POSTGRES_DB=postgres \
-        postgres:15 \
-        -c max_prepared_transactions=100 \
-        -c wal_level=replica
-      
-      # Wait for PostgreSQL to be ready
+      # Wait for PostgreSQL
       echo "Waiting for PostgreSQL..."
-      for i in $(seq 1 30); do
-        if docker exec test-db pg_isready -U odoo 2>/dev/null; then
-          echo "PostgreSQL is ready"
-          break
-        fi
-        echo "  waiting... ($i/30)"
-        sleep 2
-      done
+      oca_wait_for_postgres
       
-      # Run Odoo tests
-      echo "Running tests for modules: $CHANGED_MODULES"
-      docker run --rm \
-        --network test-network \
-        -e HOST=test-db \
-        -e PORT=5432 \
-        -e USER=odoo \
-        -e PASSWORD=odoo \
-        "${CONTAINER_IMAGE}:latest" \
-        odoo \
-        -d "$TEST_DB" \
-        -i "$CHANGED_MODULES" \
+      # OCA two-step approach:
+      # 1. Install dependencies WITHOUT --test-enable (so their tests don't run)
+      # 2. Install/upgrade our addons WITH --test-enable (only our tests run)
+      
+      # Step 1: Install dependencies only
+      echo "Installing dependencies (without tests)..."
+      DEPS=$(manifestoo --select-addons-dir ${ADDONS_DIR} list-depends --separator=,)
+      echo "Dependencies: ${DEPS:-base}"
+      unbuffer $(which odoo) \
+        -d ${PGDATABASE} \
+        -i ${DEPS:-base} \
+        --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
+        --http-interface=127.0.0.1 \
+        --stop-after-init 2>&1 | tee test-output.log | oca_checklog_odoo
+      
+      # Step 2: Run tests on our addons only
+      echo "Running tests on our addons (full log in test-output.log)..."
+      unbuffer coverage run --include "${ADDONS_DIR}/*" --branch \
+        $(which odoo) \
+        -d ${PGDATABASE} \
+        -i ${ADDONS} \
+        --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
         --test-enable \
-        --stop-after-init \
-        --log-level=test \
-        --db_replica_host=test-db
+        --http-interface=127.0.0.1 \
+        --stop-after-init 2>&1 | tee -a test-output.log | oca_checklog_odoo
       
-      # Cleanup
-      echo "Cleaning up..."
-      docker stop test-db || true
-      docker rm test-db || true
-      docker network rm test-network || true
+      # Generate coverage report
+      echo "=== Coverage Report ==="
+      coverage report | tee -a test-output.log
+      coverage xml -o coverage.xml
+      coverage html -d htmlcov
       
       echo "=== Tests completed successfully ==="
+  after_script:
+    # Generate JUnit XML report from test log (script passed as artifact from build)
+    - |
+      if [ -f ci-scripts/odoo_log_to_junit.py ] && [ -f test-output.log ]; then
+        python3 ci-scripts/odoo_log_to_junit.py test-output.log -o junit-report.xml
+      else
+        echo "JUnit report generation skipped - script or log not available"
+      fi
+  coverage: '/TOTAL.*\s+(\d+%)/'
   artifacts:
     when: always
     paths:
-      - test-results/
+      - htmlcov/
+      - coverage.xml
+      - test-output.log
+      - junit-report.xml
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+      junit: junit-report.xml
     expire_in: 1 week
   allow_failure: false
 
-# Deploy stage will only run if KUBECTL_NAMESPACE and ODOO_INSTANCE_NAME are defined
+# Deploy stage - requires DEPLOY_BRANCHES to match and deploy config to be set
+# Deploy config can come from:
+#   1. KUBECTL_NAMESPACE + ODOO_INSTANCE_NAME variables (simple single-target)
+#   2. .odoo-ci.yml config file (multi-target, branch-specific mappings)
 deploy:
   stage: deploy
   image: bitnami/kubectl:latest
@@ -303,23 +190,62 @@ deploy:
   needs:
     - job: build
     - job: test
-      optional: true  # Test job may be skipped if TEST_ENABLED is not set
+      optional: true  # Test job may be skipped if TEST_BRANCHES is not set
   dependencies:
     - build
   rules:
-    # Only deploy on staging branch when namespace and instance name are defined
-    - if: $KUBECTL_NAMESPACE && $ODOO_INSTANCE_NAME && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
+    # Use DEPLOY_BRANCHES if set
+    - if: $DEPLOY_BRANCHES && $CI_COMMIT_BRANCH =~ $DEPLOY_BRANCHES
+      when: on_success
+    # Legacy: fall back to STAGING_BRANCH for backwards compatibility
+    - if: $STAGING_BRANCH && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
       when: on_success
     # Default - don't deploy
     - when: never
+  before_script:
+    # Install yq for parsing deploy targets config
+    - |
+      if [ -n "$DEPLOY_TARGETS" ] || [ -f .odoo-ci.yml ]; then
+        curl -sSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq
+        chmod +x /usr/local/bin/yq
+      fi
   script:
     - |
+      set -e
       CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
-      # Read the image digest from the file
       IMAGE_DIGEST=$(cat image-digest.txt)
-
-      # Patch the OdooInstance custom resource with the new image
-      kubectl patch odooinstance "${ODOO_INSTANCE_NAME}" \
-        --namespace "${KUBECTL_NAMESPACE}" \
+      
+      # Determine deploy target - check DEPLOY_TARGETS file variable first, then .odoo-ci.yml, then CI variables
+      # DEPLOY_TARGETS is a GitLab file variable containing the path to a YAML file
+      # Expected format:
+      # targets:
+      #   - branch-name:
+      #       namespace: k8s-namespace
+      #       instance: odoo-instance-name
+      CONFIG_FILE=""
+      if [ -n "$DEPLOY_TARGETS" ] && [ -f "$DEPLOY_TARGETS" ]; then
+        CONFIG_FILE="$DEPLOY_TARGETS"
+      elif [ -f .odoo-ci.yml ]; then
+        CONFIG_FILE=".odoo-ci.yml"
+      fi
+      
+      if [ -n "$CONFIG_FILE" ]; then
+        DEPLOY_NAMESPACE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].namespace // empty" "$CONFIG_FILE")
+        DEPLOY_INSTANCE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].instance // empty" "$CONFIG_FILE")
+      fi
+      
+      # Fall back to CI variables if config file didn't provide values
+      DEPLOY_NAMESPACE="${DEPLOY_NAMESPACE:-$KUBECTL_NAMESPACE}"
+      DEPLOY_INSTANCE="${DEPLOY_INSTANCE:-$ODOO_INSTANCE_NAME}"
+      
+      if [ -z "$DEPLOY_NAMESPACE" ] || [ -z "$DEPLOY_INSTANCE" ]; then
+        echo "ERROR: Deploy target not configured for branch ${CI_COMMIT_BRANCH}"
+        echo "Set KUBECTL_NAMESPACE/ODOO_INSTANCE_NAME variables or add to .odoo-ci.yml"
+        exit 1
+      fi
+      
+      echo "Deploying to ${DEPLOY_NAMESPACE}/${DEPLOY_INSTANCE}"
+      kubectl patch odooinstance "${DEPLOY_INSTANCE}" \
+        --namespace "${DEPLOY_NAMESPACE}" \
         --type merge \
         --patch "{\"spec\":{\"image\":\"${CONTAINER_IMAGE}@${IMAGE_DIGEST}\"}}"
