@@ -273,7 +273,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Convert Odoo test log to JUnit XML format"
     )
-    parser.add_argument("logfile", type=Path, help="Path to Odoo test log file")
+    parser.add_argument(
+        "logfile",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="Path to Odoo test log file (use - or omit for stdin)",
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -287,13 +293,24 @@ def main():
 
     args = parser.parse_args()
 
-    if not args.logfile.exists():
-        print(f"Error: Log file not found: {args.logfile}", file=sys.stderr)
-        sys.exit(1)
-
-    # Parse the log file
+    # Parse the log file or stdin
     log_parser = OdooLogParser()
-    suites = log_parser.parse_file(args.logfile)
+
+    if args.logfile is None or str(args.logfile) == "-":
+        # Read from stdin (supports piping)
+        for line in sys.stdin:
+            log_parser.parse_line(line)
+        # Finish any remaining test
+        if log_parser.current_test:
+            log_parser.current_test.status = "passed"
+            suite = log_parser.get_or_create_suite(log_parser.current_test.module)
+            suite.tests.append(log_parser.current_test)
+        suites = log_parser.suites
+    else:
+        if not args.logfile.exists():
+            print(f"Error: Log file not found: {args.logfile}", file=sys.stderr)
+            sys.exit(1)
+        suites = log_parser.parse_file(args.logfile)
 
     # Generate JUnit XML
     xml_root = generate_junit_xml(suites)
