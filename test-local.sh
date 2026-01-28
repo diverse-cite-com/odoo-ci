@@ -32,18 +32,27 @@ TEST_MODE="${1:-community}"
 case "$TEST_MODE" in
   community)
     IMAGE="ghcr.io/oca/oca-ci/py3.10-odoo${ODOO_VERSION}:latest"
+    EXTRA_ADDONS_PATH="/mnt/test-addons"
+    BASE_ADDONS_PATH="/opt/odoo/addons"
     log_info "Testing OCA community-ci image: $IMAGE"
     ;;
   community-local)
     IMAGE="odoo-community-ci:${ODOO_VERSION}"
+    EXTRA_ADDONS_PATH="/mnt/test-addons"
+    BASE_ADDONS_PATH="/opt/odoo/addons"
     log_info "Testing locally built community-ci image: $IMAGE"
     ;;
   enterprise)
     IMAGE="${REGISTRY}/bemade/docker-odoo-enterprise/odoo-enterprise-ci:${ODOO_VERSION}"
+    EXTRA_ADDONS_PATH="/mnt/extra-addons"
+    # Enterprise image has /mnt/enterprise-addons in ADDONS_PATH already
+    BASE_ADDONS_PATH="/opt/odoo/addons,/mnt/enterprise-addons"
     log_info "Testing enterprise-ci image: $IMAGE"
     ;;
   bemade)
     IMAGE="${REGISTRY}/bemade/bemade-site:test"
+    EXTRA_ADDONS_PATH="/mnt/extra-addons"
+    BASE_ADDONS_PATH="/opt/odoo/addons,/mnt/enterprise-addons"
     log_info "Testing bemade-site test image: $IMAGE"
     ;;
   all)
@@ -106,60 +115,63 @@ docker run --rm \
   -e PGUSER=odoo \
   -e PGPASSWORD=odoo \
   -e PGDATABASE=odoo \
-  -e ADDONS_DIR=/mnt/test-addons \
-  -v "${SCRIPT_DIR}/tests/test-addon:/mnt/test-addons/test_addon" \
+  -e ADDONS_DIR=${EXTRA_ADDONS_PATH} \
+  -v "${SCRIPT_DIR}/tests/test-addon:${EXTRA_ADDONS_PATH}/test_addon" \
   "$IMAGE" \
-  bash -c '
+  bash -c "
     set -e
-    echo "=== OCA CI Test Run ==="
-    echo "Odoo version: $(odoo --version 2>/dev/null || echo unknown)"
-    echo "Python version: $(python --version)"
-    echo "Chrome version: $(google-chrome --version 2>/dev/null || echo not installed)"
+    ADDONS_DIR=${EXTRA_ADDONS_PATH}
+    echo '=== OCA CI Test Run ==='
+    echo \"Odoo version: \$(odoo --version 2>/dev/null || echo unknown)\"
+    echo \"Python version: \$(python --version)\"
+    echo \"Chrome version: \$(google-chrome --version 2>/dev/null || echo not installed)\"
     
     # Wait for postgres
     oca_wait_for_postgres
     
     # List addons
-    ADDONS=$(manifestoo --select-addons-dir /mnt/test-addons list --separator=, 2>/dev/null || echo "")
-    if [ -z "$ADDONS" ]; then
-      echo "No addons found in /mnt/test-addons"
-      echo "Running basic Odoo startup test instead..."
+    ADDONS=\$(manifestoo --select-addons-dir \${ADDONS_DIR} list --separator=, 2>/dev/null || echo '')
+    if [ -z \"\$ADDONS\" ]; then
+      echo \"No addons found in \${ADDONS_DIR}\"
+      echo 'Running basic Odoo startup test instead...'
       odoo -d odoo --stop-after-init --no-http
-      echo "=== Basic startup test passed ==="
+      echo '=== Basic startup test passed ==='
       exit 0
     fi
     
-    echo "Addons to test: $ADDONS"
+    echo \"Addons to test: \$ADDONS\"
     
     # OCA two-step approach:
     # 1. Install dependencies WITHOUT --test-enable
     # 2. Install/upgrade our addons WITH --test-enable
     
     # Step 1: Install dependencies only
-    echo "Installing dependencies (without tests)..."
-    DEPS=$(manifestoo --select-addons-dir /mnt/test-addons list-depends --separator=, 2>/dev/null || echo "base")
-    echo "Dependencies: ${DEPS:-base}"
-    unbuffer $(which odoo) \
+    echo 'Installing dependencies (without tests)...'
+    DEPS=\$(manifestoo --select-addons-dir \${ADDONS_DIR} list-depends --separator=, 2>/dev/null || echo 'base')
+    echo \"Dependencies: \${DEPS:-base}\"
+    unbuffer \$(which odoo) \
       -d odoo \
-      -i ${DEPS:-base} \
+      -i \${DEPS:-base} \
+      --addons-path=${BASE_ADDONS_PATH},\${ADDONS_DIR} \
       --http-interface=127.0.0.1 \
       --stop-after-init | oca_checklog_odoo
     
     # Step 2: Run tests on our addons only
-    echo "Running tests on our addons..."
-    unbuffer coverage run --include "/mnt/test-addons/*" --branch \
-      $(which odoo) \
+    echo 'Running tests on our addons...'
+    unbuffer coverage run --include \"\${ADDONS_DIR}/*\" --branch \
+      \$(which odoo) \
       -d odoo \
-      -i ${ADDONS} \
+      -i \${ADDONS} \
+      --addons-path=${BASE_ADDONS_PATH},\${ADDONS_DIR} \
       --test-enable \
       --http-interface=127.0.0.1 \
       --stop-after-init | oca_checklog_odoo
     
-    echo "=== Coverage Report ==="
+    echo '=== Coverage Report ==='
     coverage report || true
     
-    echo "=== Tests completed successfully ==="
-  ' 2>&1 | tee "${LOG_FILE}"
+    echo '=== Tests completed successfully ==='
+  " 2>&1 | tee "${LOG_FILE}"
 
 # Get exit code from docker, not tee
 TEST_EXIT_CODE=${PIPESTATUS[0]}
