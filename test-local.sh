@@ -50,9 +50,11 @@ case "$TEST_MODE" in
     log_info "Testing enterprise-ci image: $IMAGE"
     ;;
   bemade)
-    IMAGE="${REGISTRY}/bemade/bemade-site:test"
+    IMAGE="${REGISTRY}/bemade/bemade-site/odoo-test-ci:test"
     EXTRA_ADDONS_PATH="/mnt/extra-addons"
     BASE_ADDONS_PATH="/opt/odoo/addons,/mnt/enterprise-addons"
+    # Don't mount test addon - use addons already in image
+    SKIP_TEST_ADDON_MOUNT=true
     log_info "Testing bemade-site test image: $IMAGE"
     ;;
   all)
@@ -108,6 +110,12 @@ sleep 3
 POSTGRES_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${PG_CONTAINER}")
 log_info "PostgreSQL IP: $POSTGRES_IP"
 
+# Build volume mount args
+VOLUME_ARGS=""
+if [ "${SKIP_TEST_ADDON_MOUNT:-false}" != "true" ]; then
+  VOLUME_ARGS="-v ${SCRIPT_DIR}/tests/test-addon:${EXTRA_ADDONS_PATH}/test_addon"
+fi
+
 # Run the CI tests
 log_info "Running CI tests..."
 docker run --rm \
@@ -116,7 +124,7 @@ docker run --rm \
   -e PGPASSWORD=odoo \
   -e PGDATABASE=odoo \
   -e ADDONS_DIR=${EXTRA_ADDONS_PATH} \
-  -v "${SCRIPT_DIR}/tests/test-addon:${EXTRA_ADDONS_PATH}/test_addon" \
+  ${VOLUME_ARGS} \
   "$IMAGE" \
   bash -c "
     set -e

@@ -23,17 +23,23 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
        fi \
     && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
 
-# Install uv for faster package management
-RUN pip install --break-system-packages uv
-
-# Install packages with appropriate flags
-RUN uv pip install --system --break-system-packages --upgrade pytz
+# Install uv for faster package management (to venv if CI image, else system)
+RUN if [ -d /opt/odoo-venv ]; then \
+      /opt/odoo-venv/bin/pip install uv; \
+    else \
+      pip install --break-system-packages uv; \
+    fi
 
 # Copy addons
 COPY ./addons /mnt/extra-addons
 COPY requirements.txt /mnt/extra-addons/
 
 # Install requirements from file if present
+# Use uv with venv for CI images, system for production
 RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
-      uv pip install --system --break-system-packages --reinstall typing-extensions -r /mnt/extra-addons/requirements.txt; \
+      if [ -d /opt/odoo-venv ]; then \
+        uv pip install --python /opt/odoo-venv/bin/python -r /mnt/extra-addons/requirements.txt; \
+      else \
+        uv pip install --system --break-system-packages -r /mnt/extra-addons/requirements.txt; \
+      fi \
     fi

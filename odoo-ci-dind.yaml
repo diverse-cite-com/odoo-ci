@@ -121,6 +121,7 @@ test:
       unbuffer $(which odoo) \
         -d ${PGDATABASE} \
         -i ${DEPS:-base} \
+        --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
         --http-interface=127.0.0.1 \
         --stop-after-init 2>&1 | tee test-output.log | oca_checklog_odoo
       
@@ -130,6 +131,7 @@ test:
         $(which odoo) \
         -d ${PGDATABASE} \
         -i ${ADDONS} \
+        --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
         --test-enable \
         --http-interface=127.0.0.1 \
         --stop-after-init 2>&1 | tee -a test-output.log | oca_checklog_odoo
