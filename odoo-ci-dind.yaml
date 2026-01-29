@@ -229,8 +229,8 @@ deploy:
       fi
       
       if [ -n "$CONFIG_FILE" ]; then
-        DEPLOY_NAMESPACE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].namespace // empty" "$CONFIG_FILE")
-        DEPLOY_INSTANCE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].instance // empty" "$CONFIG_FILE")
+        DEPLOY_NAMESPACE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].namespace" "$CONFIG_FILE" 2>/dev/null || echo "")
+        DEPLOY_INSTANCE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].instance" "$CONFIG_FILE" 2>/dev/null || echo "")
       fi
       
       # Fall back to CI variables if config file didn't provide values
