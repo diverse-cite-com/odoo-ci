@@ -64,16 +64,27 @@ BUILD_DATE=$(date +%Y-%m-%d)
 touch requirements.txt build-packages.txt runtime-packages.txt
 
 # Build the Docker image with date and latest tags
-# Production uses: odoo-enterprise-19.0:latest
-docker build \
-  --no-cache \
-  -f "${dockerfile}" \
-  --build-arg ODOO_VERSION=${ODOO_VERSION} \
-  --build-arg REGISTRY=${CI_REGISTRY} \
-  --build-arg BASE_IMAGE_TAG="odoo-enterprise-${ODOO_VERSION}:latest" \
-  -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
-  -t "${CONTAINER_IMAGE}:latest" \
-  .
+# Production uses: odoo-enterprise-19.0:latest (enterprise) or odoo:19.0 (community)
+if [[ $COMMUNITY ]]; then
+  # Community uses official odoo image - don't pass BASE_IMAGE_TAG, let Dockerfile default work
+  docker build \
+    --no-cache \
+    -f "${dockerfile}" \
+    --build-arg ODOO_VERSION=${ODOO_VERSION} \
+    -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
+    -t "${CONTAINER_IMAGE}:latest" \
+    .
+else
+  docker build \
+    --no-cache \
+    -f "${dockerfile}" \
+    --build-arg ODOO_VERSION=${ODOO_VERSION} \
+    --build-arg REGISTRY=${CI_REGISTRY} \
+    --build-arg BASE_IMAGE_TAG="odoo-enterprise-${ODOO_VERSION}:latest" \
+    -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
+    -t "${CONTAINER_IMAGE}:latest" \
+    .
+fi
 
 # Push the production image with date and latest tags
 docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
