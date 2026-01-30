@@ -64,27 +64,21 @@ BUILD_DATE=$(date +%Y-%m-%d)
 touch requirements.txt build-packages.txt runtime-packages.txt
 
 # Build the Docker image with date and latest tags
-# Production uses: odoo-enterprise-19.0:latest (enterprise) or odoo:19.0 (community)
+# Production uses: odoo-enterprise-19.0:latest or odoo-community-19.0:latest
 if [[ $COMMUNITY ]]; then
-  # Community uses official odoo image - don't pass BASE_IMAGE_TAG, let Dockerfile default work
-  docker build \
-    --no-cache \
-    -f "${dockerfile}" \
-    --build-arg ODOO_VERSION=${ODOO_VERSION} \
-    -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
-    -t "${CONTAINER_IMAGE}:latest" \
-    .
+  PROD_BASE_IMAGE="odoo-community-${ODOO_VERSION}:latest"
 else
-  docker build \
-    --no-cache \
-    -f "${dockerfile}" \
-    --build-arg ODOO_VERSION=${ODOO_VERSION} \
-    --build-arg REGISTRY=${CI_REGISTRY} \
-    --build-arg BASE_IMAGE_TAG="odoo-enterprise-${ODOO_VERSION}:latest" \
-    -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
-    -t "${CONTAINER_IMAGE}:latest" \
-    .
+  PROD_BASE_IMAGE="odoo-enterprise-${ODOO_VERSION}:latest"
 fi
+docker build \
+  --no-cache \
+  -f "${dockerfile}" \
+  --build-arg ODOO_VERSION=${ODOO_VERSION} \
+  --build-arg REGISTRY=${CI_REGISTRY} \
+  --build-arg BASE_IMAGE_TAG="${PROD_BASE_IMAGE}" \
+  -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
+  -t "${CONTAINER_IMAGE}:latest" \
+  .
 
 # Push the production image with date and latest tags
 docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
@@ -97,7 +91,7 @@ if [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
   echo "Building test image..."
   # CI uses: odoo-enterprise-ci:19.0 or odoo-community-ci:19.0
   if [[ $COMMUNITY ]]; then
-    CI_BASE_IMAGE="${CI_REGISTRY}/bemade/docker-odoo-enterprise/odoo-community-ci:${ODOO_VERSION}"
+    CI_BASE_IMAGE="odoo-community-ci:${ODOO_VERSION}"
   else
     CI_BASE_IMAGE="odoo-enterprise-ci:${ODOO_VERSION}"
   fi
