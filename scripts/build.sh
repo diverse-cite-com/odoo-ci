@@ -84,13 +84,18 @@ grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
 # Build test image if testing is enabled (TEST_BRANCHES or legacy TEST_ENABLED)
 if [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
   echo "Building test image..."
-  # CI uses: odoo-enterprise-ci:19.0
+  # CI uses: odoo-enterprise-ci:19.0 or odoo-community-ci:19.0
+  if [[ $COMMUNITY ]]; then
+    CI_BASE_IMAGE="${CI_REGISTRY}/bemade/docker-odoo-enterprise/odoo-community-ci:${ODOO_VERSION}"
+  else
+    CI_BASE_IMAGE="odoo-enterprise-ci:${ODOO_VERSION}"
+  fi
   docker build \
     --no-cache \
     -f "${dockerfile}" \
     --build-arg ODOO_VERSION=${ODOO_VERSION} \
     --build-arg REGISTRY=${CI_REGISTRY} \
-    --build-arg BASE_IMAGE_TAG="odoo-enterprise-ci:${ODOO_VERSION}" \
+    --build-arg BASE_IMAGE_TAG="${CI_BASE_IMAGE}" \
     -t "${CONTAINER_IMAGE}:test" \
     .
   docker push "${CONTAINER_IMAGE}:test"

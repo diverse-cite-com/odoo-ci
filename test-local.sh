@@ -4,10 +4,10 @@
 # Tests the CI images locally before pushing to GitLab
 #
 # Usage:
-#   ./test-local.sh community    # Test community-ci image
-#   ./test-local.sh enterprise   # Test enterprise-ci image  
-#   ./test-local.sh bemade       # Test with bemade-site addons
-#   ./test-local.sh all          # Test all in parallel
+#   ./test-local.sh                  # Test enterprise-ci image (default)
+#   ./test-local.sh community-local  # Test locally built community-ci image
+#   ./test-local.sh enterprise       # Test enterprise-ci image
+#   ./test-local.sh all              # Test all in parallel
 #
 
 set -e
@@ -27,15 +27,9 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 # Default test mode
-TEST_MODE="${1:-community}"
+TEST_MODE="${1:-enterprise}"
 
 case "$TEST_MODE" in
-  community)
-    IMAGE="ghcr.io/oca/oca-ci/py3.10-odoo${ODOO_VERSION}:latest"
-    EXTRA_ADDONS_PATH="/mnt/test-addons"
-    BASE_ADDONS_PATH="/opt/odoo/addons"
-    log_info "Testing OCA community-ci image: $IMAGE"
-    ;;
   community-local)
     IMAGE="odoo-community-ci:${ODOO_VERSION}"
     EXTRA_ADDONS_PATH="/mnt/test-addons"
@@ -49,17 +43,9 @@ case "$TEST_MODE" in
     BASE_ADDONS_PATH="/opt/odoo/addons,/mnt/enterprise-addons"
     log_info "Testing enterprise-ci image: $IMAGE"
     ;;
-  bemade)
-    IMAGE="${REGISTRY}/bemade/bemade-site/odoo-test-ci:test"
-    EXTRA_ADDONS_PATH="/mnt/extra-addons"
-    BASE_ADDONS_PATH="/opt/odoo/addons,/mnt/enterprise-addons"
-    # Don't mount test addon - use addons already in image
-    SKIP_TEST_ADDON_MOUNT=true
-    log_info "Testing bemade-site test image: $IMAGE"
-    ;;
   all)
     log_info "Running all tests in parallel..."
-    $0 community &
+    $0 community-local &
     PID1=$!
     $0 enterprise &
     PID2=$!
@@ -77,7 +63,7 @@ case "$TEST_MODE" in
     ;;
   *)
     log_error "Unknown test mode: $TEST_MODE"
-    echo "Usage: $0 [community|community-local|enterprise|bemade|all]"
+    echo "Usage: $0 [community-local|enterprise|all]"
     exit 1
     ;;
 esac
@@ -110,12 +96,6 @@ sleep 3
 POSTGRES_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${PG_CONTAINER}")
 log_info "PostgreSQL IP: $POSTGRES_IP"
 
-# Build volume mount args
-VOLUME_ARGS=""
-if [ "${SKIP_TEST_ADDON_MOUNT:-false}" != "true" ]; then
-  VOLUME_ARGS="-v ${SCRIPT_DIR}/tests/test-addon:${EXTRA_ADDONS_PATH}/test_addon"
-fi
-
 # Run the CI tests
 log_info "Running CI tests..."
 docker run --rm \
@@ -124,7 +104,7 @@ docker run --rm \
   -e PGPASSWORD=odoo \
   -e PGDATABASE=odoo \
   -e ADDONS_DIR=${EXTRA_ADDONS_PATH} \
-  ${VOLUME_ARGS} \
+  -v ${SCRIPT_DIR}/tests/test-addon:${EXTRA_ADDONS_PATH}/test_addon \
   "$IMAGE" \
   bash -c "
     set -e

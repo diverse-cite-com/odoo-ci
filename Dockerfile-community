@@ -1,5 +1,9 @@
 ARG ODOO_VERSION=18.0
-FROM odoo:${ODOO_VERSION}
+ARG REGISTRY=registry.bemade.org:443
+# For production: leave BASE_IMAGE empty to use official odoo image
+# For CI: set BASE_IMAGE_TAG to bemade/docker-odoo-enterprise/odoo-community-ci:18.0
+ARG BASE_IMAGE_TAG=
+FROM ${BASE_IMAGE_TAG:-odoo:${ODOO_VERSION}}
 
 USER 0
 
