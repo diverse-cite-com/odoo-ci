@@ -23,12 +23,7 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
        fi \
     && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
 
-# Install uv for faster package management (to venv if CI image, else system)
-RUN if [ -d /opt/odoo-venv ]; then \
-      /opt/odoo-venv/bin/pip install uv; \
-    else \
-      pip install --break-system-packages uv; \
-    fi
+# uv is already installed in the base image, no action needed
 
 # Copy addons
 COPY ./addons /mnt/extra-addons
