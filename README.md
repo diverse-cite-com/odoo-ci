@@ -135,9 +135,18 @@ your-project/
 | `odoo-ci-dind.yaml` | Main CI/CD pipeline definition |
 | `Dockerfile` | Client Odoo image with addons |
 | `Dockerfile-community` | Community Odoo image (legacy) |
+| `docker-bake.hcl` | BuildKit bake file for parallel builds |
 | `scripts/build.sh` | Docker image build script |
 | `scripts/odoo_log_to_junit.py` | Converts Odoo test logs to JUnit XML |
 | `test-local.sh` | Local testing script for CI images |
+
+## Build Performance
+
+The build stage uses **Docker BuildKit** with `buildx bake` for:
+
+- **Parallel builds**: Production and test images build simultaneously
+- **Inline caching**: Layers are cached in the registry for faster rebuilds
+- **Latest Docker**: Uses the latest Docker-in-Docker for best performance
 
 ## CI/CD Variables
 

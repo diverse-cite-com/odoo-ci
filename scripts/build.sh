@@ -63,54 +63,39 @@ BUILD_DATE=$(date +%Y-%m-%d)
 # Ensure optional files exist (empty is fine, Dockerfile handles it)
 touch requirements.txt build-packages.txt runtime-packages.txt
 
-# Build the Docker image with date and latest tags
-# Production uses: odoo-enterprise-19.0:latest or odoo-community-19.0:latest
-if [[ $COMMUNITY ]]; then
-  PROD_BASE_IMAGE="odoo-community-${ODOO_VERSION}:latest"
-else
-  PROD_BASE_IMAGE="odoo-enterprise-${ODOO_VERSION}:latest"
-fi
-docker build \
-  --no-cache \
-  -f "${dockerfile}" \
-  --build-arg ODOO_VERSION=${ODOO_VERSION} \
-  --build-arg REGISTRY=${CI_REGISTRY} \
-  --build-arg BASE_IMAGE_TAG="${PROD_BASE_IMAGE}" \
-  -t "${CONTAINER_IMAGE}:${BUILD_DATE}" \
-  -t "${CONTAINER_IMAGE}:latest" \
-  .
+# Setup buildx
+docker buildx create --use --name builder 2>/dev/null || docker buildx use builder
 
-# Push the production image with date and latest tags
-docker push "${CONTAINER_IMAGE}:${BUILD_DATE}"
-docker push "${CONTAINER_IMAGE}:latest" | tee push_output.txt
-
-grep "digest:" push_output.txt | cut -d' ' -f3 > image-digest.txt
-
-# Build test image if testing is enabled (TEST_BRANCHES or legacy TEST_ENABLED)
+# Determine which target group to build
 if [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
-  echo "Building test image..."
-  # CI uses: odoo-enterprise-ci:19.0 or odoo-community-ci:19.0
-  if [[ $COMMUNITY ]]; then
-    CI_BASE_IMAGE="odoo-community-ci:${ODOO_VERSION}"
-  else
-    CI_BASE_IMAGE="odoo-enterprise-ci:${ODOO_VERSION}"
-  fi
-  docker build \
-    --no-cache \
-    -f "${dockerfile}" \
-    --build-arg ODOO_VERSION=${ODOO_VERSION} \
-    --build-arg REGISTRY=${CI_REGISTRY} \
-    --build-arg BASE_IMAGE_TAG="${CI_BASE_IMAGE}" \
-    -t "${CONTAINER_IMAGE}:test" \
-    .
-  docker push "${CONTAINER_IMAGE}:test"
+  BAKE_TARGET="with-test"
+else
+  BAKE_TARGET="default"
+fi
 
-  # Detect changed modules and save as artifact for test stage
+# Build and push all targets in one command using buildx bake
+ODOO_VERSION=${ODOO_VERSION} \
+REGISTRY=${CI_REGISTRY} \
+CONTAINER_IMAGE=${CONTAINER_IMAGE} \
+BUILD_DATE=${BUILD_DATE} \
+COMMUNITY=${COMMUNITY:-} \
+docker buildx bake --push \
+  --set "*.platform=linux/amd64" \
+  --set "*.dockerfile=${dockerfile}" \
+  --provenance=false \
+  --sbom=false \
+  -f "${ODOO_CI_DIR}/docker-bake.hcl" \
+  ${BAKE_TARGET}
+
+# Get the digest from the pushed image
+docker buildx imagetools inspect "${CONTAINER_IMAGE}:latest" --format '{{json .Manifest.Digest}}' | tr -d '"' > image-digest.txt
+
+# Detect changed modules if testing is enabled
+if [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
   echo "Detecting changed modules..."
   CODEPENDS_FLAG=""
   if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
     CODEPENDS_FLAG="--include-codepends"
-    pip install --no-cache-dir manifestoo || true
   fi
 
   python3 "${SCRIPT_DIR}/detect_changed_modules.py" \
