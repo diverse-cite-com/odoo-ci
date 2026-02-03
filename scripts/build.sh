@@ -79,6 +79,7 @@ REGISTRY=${CI_REGISTRY} \
 CONTAINER_IMAGE=${CONTAINER_IMAGE} \
 BUILD_DATE=${BUILD_DATE} \
 COMMUNITY=${COMMUNITY:-} \
+BUILDX_BAKE_ENTITLEMENTS_FS=0 \
 docker buildx bake --push \
   --set "*.platform=linux/amd64" \
   --set "*.dockerfile=${dockerfile}" \
