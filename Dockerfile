@@ -8,7 +8,7 @@ FROM ${REGISTRY}/bemade/docker-odoo-enterprise/${BASE_IMAGE_TAG}
 USER 0
 
 # Copy package list files
-COPY build-packages.txt runtime-packages.txt /tmp/
+COPY --chown=odoo:odoo build-packages.txt runtime-packages.txt /tmp/
 
 # Install build dependencies for compilation + runtime packages if any are specified
 RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
@@ -26,8 +26,8 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
 # uv is already installed in the base image, no action needed
 
 # Copy addons
-COPY ./addons /mnt/extra-addons
-COPY requirements.txt /mnt/extra-addons/
+COPY --chown=odoo:odoo ./addons /mnt/extra-addons
+COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
 
 # Install requirements from file if present
 # Use uv with venv for CI images, system for production
