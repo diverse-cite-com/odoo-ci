@@ -9,32 +9,32 @@ USER 0
 
 # Install build dependencies required for pycairo/rlPyCairo
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3-dev \
-      libcairo2-dev \
-      pkg-config \
-      build-essential \
-    && rm -rf /var/lib/apt/lists/*
+  python3-dev \
+  libcairo2-dev \
+  pkg-config \
+  build-essential \
+  && rm -rf /var/lib/apt/lists/*
 
 # Copy package list files
 COPY build-packages.txt runtime-packages.txt /tmp/
 
 # Install additional build/runtime packages if any are specified
 RUN BUILD_PKGS=$(cat /tmp/build-packages.txt 2>/dev/null | tr '\n' ' ') \
-    && RUNTIME_PKGS=$(cat /tmp/runtime-packages.txt 2>/dev/null | tr '\n' ' ') \
-    && if [ -n "$BUILD_PKGS" ] || [ -n "$RUNTIME_PKGS" ]; then \
-         apt-get update && apt-get install -y --no-install-recommends \
-           $BUILD_PKGS \
-           $RUNTIME_PKGS \
-         && rm -rf /var/lib/apt/lists/*; \
-       fi \
-    && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
+  && RUNTIME_PKGS=$(cat /tmp/runtime-packages.txt 2>/dev/null | tr '\n' ' ') \
+  && if [ -n "$BUILD_PKGS" ] || [ -n "$RUNTIME_PKGS" ]; then \
+  apt-get update && apt-get install -y --no-install-recommends \
+  $BUILD_PKGS \
+  $RUNTIME_PKGS \
+  && rm -rf /var/lib/apt/lists/*; \
+  fi \
+  && rm -f /tmp/build-packages.txt /tmp/runtime-packages.txt
 
 # Install uv for faster package management (to venv if CI image, else system)
-RUN if [ -d /opt/odoo-venv ]; then \
-      /opt/odoo-venv/bin/pip install uv; \
-    else \
-      pip install --break-system-packages uv; \
-    fi
+RUN if [ -x /opt/odoo-venv/bin/pip ]; then \
+  /opt/odoo-venv/bin/pip install uv; \
+  else \
+  pip install --break-system-packages uv; \
+  fi
 
 # Copy addons
 COPY ./addons /mnt/extra-addons
@@ -43,9 +43,9 @@ COPY requirements.txt /mnt/extra-addons/
 # Install requirements from file if present
 # Use uv with venv for CI images, system for production
 RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
-      if [ -d /opt/odoo-venv ]; then \
-        uv pip install --python /opt/odoo-venv/bin/python -r /mnt/extra-addons/requirements.txt; \
-      else \
-        uv pip install --system --break-system-packages -r /mnt/extra-addons/requirements.txt; \
-      fi \
-    fi
+  if [ -x /opt/odoo-venv/bin/python ]; then \
+  uv pip install --python /opt/odoo-venv/bin/python -r /mnt/extra-addons/requirements.txt; \
+  else \
+  uv pip install --system --break-system-packages -r /mnt/extra-addons/requirements.txt; \
+  fi \
+  fi
