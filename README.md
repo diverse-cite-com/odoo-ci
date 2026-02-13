@@ -133,8 +133,7 @@ your-project/
 | File | Description |
 |------|-------------|
 | `odoo-ci-dind.yaml` | Main CI/CD pipeline definition |
-| `Dockerfile` | Client Odoo image with addons |
-| `Dockerfile-community` | Community Odoo image (legacy) |
+| `Dockerfile` | Client Odoo image with addons (enterprise and community) |
 | `docker-bake.hcl` | BuildKit bake file for parallel builds |
 | `scripts/build.sh` | Docker image build script |
 | `scripts/odoo_log_to_junit.py` | Converts Odoo test logs to JUnit XML |

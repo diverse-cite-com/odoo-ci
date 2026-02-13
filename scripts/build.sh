@@ -4,7 +4,7 @@
 #   CI_REGISTRY, CI_DEPLOY_USER, CI_DEPLOY_PASSWORD
 #   CONTAINER_IMAGE, ODOO_VERSION
 # Optional:
-#   COMMUNITY - set to use community Dockerfile
+#   COMMUNITY - set to use community base image
 #   TEST_ENABLED - set to "true" to also build test image
 
 set -ex
@@ -30,12 +30,9 @@ source "${SCRIPT_DIR}/setup_ssh.sh"
 # Clone submodules
 git submodule update --init --recursive --recommend-shallow
 
-# Determine which dockerfile to use
-if [[ $COMMUNITY ]]; then
-  dockerfile="${ODOO_CI_DIR}/Dockerfile-community"
-else
-  dockerfile="${ODOO_CI_DIR}/Dockerfile"
-fi
+# Single Dockerfile for both enterprise and community
+# (docker-bake.hcl handles base image selection via COMMUNITY flag)
+dockerfile="${ODOO_CI_DIR}/Dockerfile"
 
 # Prepare the build context
 if [ -f ".odoo-deploy/odoo-ci/prepare-build.sh" ]; then
