@@ -31,10 +31,16 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt 2>/dev/null | tr '\n' ' ') \
 
 # Install uv for faster package management (to venv if CI image, else system)
 RUN if [ -x /opt/odoo-venv/bin/pip ]; then \
-  /opt/odoo-venv/bin/pip install uv; \
-  else \
-  pip install --break-system-packages uv; \
-  fi
+      /opt/odoo-venv/bin/pip install uv; \
+    elif command -v pip3 >/dev/null 2>&1; then \
+      pip3 install --break-system-packages uv; \
+    elif command -v pip >/dev/null 2>&1; then \
+      pip install --break-system-packages uv; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends python3-pip \
+      && pip3 install --break-system-packages uv \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Copy addons
 COPY ./addons /mnt/extra-addons
