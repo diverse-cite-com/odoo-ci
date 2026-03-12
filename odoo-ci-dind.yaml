@@ -1,17 +1,20 @@
 # Branch control variables (all are regex patterns):
-#   BUILD_BRANCHES - which branches trigger builds (falls back to ALLOWED_BRANCHES)
-#   TEST_BRANCHES  - which branches run tests (no fallback, unset = no tests)
-#   DEPLOY_BRANCHES - which branches can deploy (no fallback, unset = no deploy)
-#   ALLOWED_BRANCHES - legacy, used as fallback for BUILD_BRANCHES
+#   BUILD_BRANCHES    - which branches trigger builds (falls back to ALLOWED_BRANCHES)
+#   TEST_BRANCHES     - which branches run tests (no fallback, unset = no tests)
+#   DEPLOY_BRANCHES   - which branches can deploy (no fallback, unset = no deploy)
+#   MR_TARGET_BRANCHES - target branches whose MRs trigger build+test (no fallback, unset = no MR pipelines)
+#   ALLOWED_BRANCHES  - legacy, used as fallback for BUILD_BRANCHES
 # Format: re2 regex, see https://github.com/google/re2
 
 variables:
-  CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-$CI_COMMIT_BRANCH"
+  # CI_COMMIT_BRANCH is set for push pipelines; CI_MERGE_REQUEST_SOURCE_BRANCH_NAME for MR pipelines
+  CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-${CI_COMMIT_BRANCH}${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
 
 stages:
   - build
   - test
   - deploy
+  - cleanup
 
 # Reusable SSH setup for cloning odoo-ci and other repos
 .setup_ssh: &setup_ssh
@@ -33,6 +36,9 @@ stages:
 
 workflow:
   rules:
+    # MR pipelines: run when MR targets a matching branch
+    - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
+      when: always
     # Use BUILD_BRANCHES if set, otherwise fall back to ALLOWED_BRANCHES
     - if: $BUILD_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $BUILD_BRANCHES
       when: always
@@ -45,6 +51,9 @@ build:
   tags: [kubernetes]
   image: docker
   rules:
+    # MR pipelines
+    - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
+      when: always
     # Use BUILD_BRANCHES if set, otherwise fall back to ALLOWED_BRANCHES
     - if: $BUILD_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $BUILD_BRANCHES
       when: always
@@ -98,6 +107,9 @@ test:
     PGPASSWORD: odoo
     PGDATABASE: odoo
   rules:
+    # MR pipelines: always test
+    - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
+      when: on_success
     - if: $TEST_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $TEST_BRANCHES
       when: on_success
     - when: never
@@ -249,3 +261,43 @@ deploy:
         --namespace "${DEPLOY_NAMESPACE}" \
         --type merge \
         --patch "{\"spec\":{\"image\":\"${CONTAINER_IMAGE}@${IMAGE_DIGEST}\"}}"
+
+# Cleanup stage - removes MR images from the container registry after build+test
+cleanup:
+  stage: cleanup
+  image: alpine:latest
+  tags: [kubernetes]
+  needs:
+    - job: test
+      optional: true
+  rules:
+    - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
+      when: always
+    - when: never
+  script:
+    - apk add --no-cache curl jq
+    - |
+      set -e
+      echo "=== Cleaning up MR container images ==="
+
+      # Use GitLab registry API to find and delete the MR image repository
+      # The registry repo path is derived from CONTAINER_IMAGE minus the registry host
+      REPO_PATH="${CONTAINER_IMAGE#*/}"
+
+      # URL-encode the repo path (slashes become %2F)
+      ENCODED_PATH=$(echo "$REPO_PATH" | sed 's|/|%2F|g')
+
+      API_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/registry/repositories"
+
+      # Find the registry repository ID for this MR's image
+      REPO_ID=$(curl -s --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        "${API_URL}" | jq -r ".[] | select(.path == \"${REPO_PATH}\") | .id")
+
+      if [ -n "$REPO_ID" ] && [ "$REPO_ID" != "null" ]; then
+        echo "Deleting registry repository ${REPO_PATH} (ID: ${REPO_ID})..."
+        curl -s --request DELETE --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          "${API_URL}/${REPO_ID}"
+        echo "Cleanup complete."
+      else
+        echo "Registry repository not found for ${REPO_PATH} - nothing to clean up."
+      fi

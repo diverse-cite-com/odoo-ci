@@ -64,7 +64,10 @@ touch requirements.txt build-packages.txt runtime-packages.txt
 docker buildx create --use --name builder 2>/dev/null || docker buildx use builder
 
 # Determine which target group to build
-if [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
+if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+  # MR pipelines: only build the test image, skip production tags
+  BAKE_TARGET="test-only"
+elif [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
   BAKE_TARGET="with-test"
 else
   BAKE_TARGET="default"
@@ -86,10 +89,15 @@ docker buildx bake --push \
   ${BAKE_TARGET}
 
 # Get the digest from the pushed image
-docker buildx imagetools inspect "${CONTAINER_IMAGE}:latest" --format '{{json .Manifest.Digest}}' | tr -d '"' > image-digest.txt
+if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+  DIGEST_TAG="test"
+else
+  DIGEST_TAG="latest"
+fi
+docker buildx imagetools inspect "${CONTAINER_IMAGE}:${DIGEST_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"' > image-digest.txt
 
 # Detect changed modules if testing is enabled
-if [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
+if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ] || [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
   echo "Detecting changed modules..."
   CODEPENDS_FLAG=""
   if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then

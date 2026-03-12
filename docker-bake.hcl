@@ -39,6 +39,10 @@ group "with-test" {
   targets = ["production", "test"]
 }
 
+group "test-only" {
+  targets = ["test"]
+}
+
 target "production" {
   context = "."
   args = {
