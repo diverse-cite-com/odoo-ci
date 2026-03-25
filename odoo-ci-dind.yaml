@@ -123,12 +123,26 @@ test:
       
       # List all installable addons using manifestoo
       ADDONS=$(manifestoo --select-addons-dir ${ADDONS_DIR} list --separator=,)
-      
+
+      # Exclude modules listed under no_ci in repo_deps.yaml
+      if [ -f "${CI_PROJECT_DIR}/repo_deps.yaml" ]; then
+        ADDONS=$(python3 -c "
+import sys, yaml
+with open('${CI_PROJECT_DIR}/repo_deps.yaml') as f:
+    data = yaml.safe_load(f) or {}
+no_ci = set(data.get('no_ci', []))
+if no_ci:
+    print('Excluding no_ci modules: ' + ', '.join(sorted(no_ci)), file=sys.stderr)
+addons = [a for a in '${ADDONS}'.split(',') if a not in no_ci]
+print(','.join(addons))
+" || echo "${ADDONS}")
+      fi
+
       if [ -z "$ADDONS" ]; then
         echo "No installable addons found - skipping tests"
         exit 0
       fi
-      
+
       echo "Addons to test: $ADDONS"
       
       # Wait for PostgreSQL
