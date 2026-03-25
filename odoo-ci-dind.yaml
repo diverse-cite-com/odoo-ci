@@ -126,16 +126,7 @@ test:
 
       # Exclude modules listed under no_ci in repo_deps.yaml
       if [ -f "${CI_PROJECT_DIR}/repo_deps.yaml" ]; then
-        ADDONS=$(python3 -c "
-import sys, yaml
-with open('${CI_PROJECT_DIR}/repo_deps.yaml') as f:
-    data = yaml.safe_load(f) or {}
-no_ci = set(data.get('no_ci', []))
-if no_ci:
-    print('Excluding no_ci modules: ' + ', '.join(sorted(no_ci)), file=sys.stderr)
-addons = [a for a in '${ADDONS}'.split(',') if a not in no_ci]
-print(','.join(addons))
-" || echo "${ADDONS}")
+        ADDONS=$(python3 -c "import sys,yaml; data=yaml.safe_load(open('${CI_PROJECT_DIR}/repo_deps.yaml')) or {}; no_ci=set(data.get('no_ci',[])); [print('Excluding no_ci modules: '+','.join(sorted(no_ci)),file=sys.stderr) for _ in [1] if no_ci]; print(','.join(a for a in '${ADDONS}'.split(',') if a not in no_ci))" || echo "${ADDONS}")
       fi
 
       if [ -z "$ADDONS" ]; then
