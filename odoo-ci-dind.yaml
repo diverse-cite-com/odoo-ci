@@ -77,7 +77,7 @@ build:
   script:
     - bash /tmp/odoo-ci/scripts/build.sh
     # Copy CI scripts for use in test stage
-    - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py ci-scripts/
+    - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py /tmp/odoo-ci/scripts/filter_no_ci.py ci-scripts/
   artifacts:
     paths:
       - image-digest.txt
@@ -126,7 +126,7 @@ test:
 
       # Exclude modules listed under no_ci in repo_deps.yaml
       if [ -f "${CI_PROJECT_DIR}/repo_deps.yaml" ]; then
-        ADDONS=$(python3 /tmp/odoo-ci/scripts/filter_no_ci.py "$ADDONS" "${CI_PROJECT_DIR}/repo_deps.yaml" || echo "$ADDONS")
+        ADDONS=$(python3 ${CI_PROJECT_DIR}/ci-scripts/filter_no_ci.py "$ADDONS" "${CI_PROJECT_DIR}/repo_deps.yaml" || echo "$ADDONS")
       fi
 
       if [ -z "$ADDONS" ]; then
