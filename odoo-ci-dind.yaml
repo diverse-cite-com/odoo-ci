@@ -122,45 +122,51 @@ test:
       ADDONS_DIR="/mnt/extra-addons"
       
       # List all installable addons using manifestoo
-      ADDONS=$(manifestoo --select-addons-dir ${ADDONS_DIR} list --separator=,)
+      ALL_ADDONS=$(manifestoo --select-addons-dir ${ADDONS_DIR} list --separator=,)
 
-      # Exclude modules listed under no_ci in repo_deps.yaml
-      if [ -f "${CI_PROJECT_DIR}/repo_deps.yaml" ]; then
-        ADDONS=$(python3 ${CI_PROJECT_DIR}/ci-scripts/filter_no_ci.py "$ADDONS" "${CI_PROJECT_DIR}/repo_deps.yaml" || echo "$ADDONS")
+      # Partition into testable and no_ci addons
+      FILTER="${CI_PROJECT_DIR}/ci-scripts/filter_no_ci.py"
+      REPO_DEPS="${CI_PROJECT_DIR}/repo_deps.yaml"
+      if [ -f "$REPO_DEPS" ]; then
+        TEST_ADDONS=$(python3 "$FILTER" "$ALL_ADDONS" "$REPO_DEPS" --emit testable || echo "$ALL_ADDONS")
+        NO_CI_ADDONS=$(python3 "$FILTER" "$ALL_ADDONS" "$REPO_DEPS" --emit no_ci || true)
+      else
+        TEST_ADDONS="$ALL_ADDONS"
+        NO_CI_ADDONS=""
       fi
 
-      if [ -z "$ADDONS" ]; then
-        echo "No installable addons found - skipping tests"
+      if [ -z "$TEST_ADDONS" ]; then
+        echo "No testable addons found - skipping tests"
         exit 0
       fi
 
-      echo "Addons to test: $ADDONS"
-      
+      echo "Addons to test: $TEST_ADDONS"
+      [ -n "$NO_CI_ADDONS" ] && echo "no_ci addons (install only): $NO_CI_ADDONS"
+
       # Wait for PostgreSQL
       echo "Waiting for PostgreSQL..."
       oca_wait_for_postgres
-      
-      # OCA two-step approach:
-      # 1. Install dependencies WITHOUT --test-enable (so their tests don't run)
-      # 2. Install/upgrade our addons WITH --test-enable (only our tests run)
-      
-      # Step 1: Install dependencies only
-      echo "Installing dependencies (without tests)..."
+
+      # Step 1: Install dependencies and no_ci addons WITHOUT tests.
+      # no_ci addons must be installed so _inherit chains resolve.
       DEPS=$(manifestoo --select-addons-dir ${ADDONS_DIR} list-depends --separator=,)
-      echo "Dependencies: ${DEPS:-base}"
+      INSTALL_LIST="${DEPS:-base}"
+      [ -n "$NO_CI_ADDONS" ] && INSTALL_LIST="${INSTALL_LIST},${NO_CI_ADDONS}"
+      echo "Installing dependencies + no_ci addons (without tests)..."
+      echo "Install list: ${INSTALL_LIST}"
       unbuffer $(which odoo) \
         -d ${PGDATABASE} \
-        -i ${DEPS:-base} \
+        -i ${INSTALL_LIST} \
         --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
         --http-interface=127.0.0.1 \
         --stop-after-init 2>&1 | tee test-output.log | oca_checklog_odoo
-      
-      # Step 2: Run tests on our addons only
+
+      # Step 2: Install and test only the non-excluded addons
       echo "Running tests on our addons (full log in test-output.log)..."
       unbuffer coverage run --include "${ADDONS_DIR}/*" --branch \
         $(which odoo) \
         -d ${PGDATABASE} \
-        -i ${ADDONS} \
+        -i ${TEST_ADDONS} \
         --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
         --test-enable \
         --http-interface=127.0.0.1 \
