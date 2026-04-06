@@ -9,9 +9,27 @@ Reads the no_ci list from repo_deps.yaml and partitions the addons CSV.
   --emit no_ci     Print addons that ARE in no_ci
 """
 import argparse
+import re
 import sys
 
-import yaml
+
+def _parse_no_ci(path):
+    """Parse the no_ci list from repo_deps.yaml without requiring pyyaml."""
+    no_ci = set()
+    in_no_ci = False
+    with open(path) as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped == "no_ci:" or stripped.startswith("no_ci:"):
+                in_no_ci = True
+                continue
+            if in_no_ci:
+                m = re.match(r"^-\s+(\S+)", stripped)
+                if m:
+                    no_ci.add(m.group(1))
+                elif stripped and not stripped.startswith("#"):
+                    break  # next top-level key
+    return no_ci
 
 
 def main():
@@ -26,10 +44,7 @@ def main():
     )
     args = parser.parse_args()
 
-    with open(args.deps_file) as f:
-        data = yaml.safe_load(f) or {}
-
-    no_ci = set(data.get("no_ci", []))
+    no_ci = _parse_no_ci(args.deps_file)
     all_addons = [a for a in args.addons_csv.split(",") if a]
 
     if no_ci:
