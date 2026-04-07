@@ -321,7 +321,7 @@ review-deploy:
       echo "  Modules: ${MODULES_JSON}"
 
       cat <<INSTANCE_EOF | kubectl apply -f -
-      apiVersion: bemade.org/v1alpha2
+      apiVersion: bemade.org/v1alpha1
       kind: OdooInstance
       metadata:
         name: ${INSTANCE_NAME}
