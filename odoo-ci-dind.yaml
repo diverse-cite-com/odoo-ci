@@ -364,7 +364,7 @@ review-deploy:
       COMMENT_BODY="${COMMENT_BODY}Instance **${INSTANCE_NAME}** is being provisioned.\n\n"
       COMMENT_BODY="${COMMENT_BODY}| | |\n|---|---|\n"
       COMMENT_BODY="${COMMENT_BODY}| URL | ${REVIEW_URL} |\n"
-      COMMENT_BODY="${COMMENT_BODY}| Login | admin / review-admin |\n"
+      COMMENT_BODY="${COMMENT_BODY}| Login | admin / admin |\n"
       COMMENT_BODY="${COMMENT_BODY}| Modules | $(cat changed-modules.txt 2>/dev/null || echo 'base') |\n\n"
       COMMENT_BODY="${COMMENT_BODY}The instance will be ready once database initialization completes (may take a few minutes)."
 

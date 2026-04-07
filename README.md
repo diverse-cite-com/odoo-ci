@@ -121,7 +121,7 @@ Ephemeral Odoo instances for merge request review, similar to Odoo's runbot.
 
 **Review instance details:**
 - URL: `https://mr-{MR_IID}-{PROJECT_SLUG}.review.bemade.org`
-- Login: `admin` / `review-admin`
+- Login: `admin` / `admin`
 - Modules installed: changed modules detected from the MR diff (with demo data)
 - Resources: 1 CPU / 2Gi memory limit
 - Labeled with `app.kubernetes.io/part-of: odoo-review` for easy identification
