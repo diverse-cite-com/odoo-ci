@@ -369,7 +369,7 @@ review-deploy:
       COMMENT_BODY="${COMMENT_BODY}The instance will be ready once database initialization completes (may take a few minutes)."
 
       curl -s --request POST \
-        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --header "PRIVATE-TOKEN: ${CI_DEPLOY_PASSWORD}" \
         --form "body=${COMMENT_BODY}" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
 
