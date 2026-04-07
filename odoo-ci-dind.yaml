@@ -305,9 +305,13 @@ review-deploy:
       CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
 
       # Build modules list from changed-modules.txt, fall back to "base"
-      if [ -f changed-modules.txt ] && [ -s changed-modules.txt ]; then
+      MODULES_RAW=""
+      if [ -f changed-modules.txt ]; then
+        MODULES_RAW=$(cat changed-modules.txt | tr -d '[:space:]')
+      fi
+      if [ -n "$MODULES_RAW" ]; then
         # Convert comma-separated to JSON array: "a,b" -> "\"a\",\"b\""
-        MODULES_JSON=$(cat changed-modules.txt | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')
+        MODULES_JSON=$(echo "$MODULES_RAW" | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')
       else
         MODULES_JSON='"base"'
       fi
@@ -317,7 +321,7 @@ review-deploy:
       echo "  Modules: ${MODULES_JSON}"
 
       cat <<INSTANCE_EOF | kubectl apply -f -
-      apiVersion: bemade.org/v1alpha1
+      apiVersion: bemade.org/v1alpha2
       kind: OdooInstance
       metadata:
         name: ${INSTANCE_NAME}
