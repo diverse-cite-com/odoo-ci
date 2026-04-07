@@ -93,6 +93,41 @@ For single-target deployments:
 | `KUBECTL_NAMESPACE` | Kubernetes namespace |
 | `ODOO_INSTANCE_NAME` | Name of the OdooInstance resource |
 
+### 4. Review Environments (MR Preview)
+
+Ephemeral Odoo instances for merge request review, similar to Odoo's runbot.
+
+**Runs when:** `REVIEW_ENABLED` is `"true"` and MR targets a `MR_TARGET_BRANCHES` branch
+
+**How it works:**
+1. MR is created → build + test run as normal
+2. `review-deploy` creates an OdooInstance with demo data in the `odoo-review` namespace
+3. A comment is posted on the MR with the review URL and login credentials
+4. When the MR is merged or closed, GitLab auto-triggers `review-stop` which deletes the instance and cleans up the container image
+
+**Setup:**
+
+1. Create the review namespace (one-time):
+   ```bash
+   kubectl create ns odoo-review
+   ```
+
+2. Ensure wildcard DNS `*.review.bemade.org` resolves to the cluster ingress
+
+3. Set the CI variable in your project:
+   ```
+   REVIEW_ENABLED = "true"
+   ```
+
+**Review instance details:**
+- URL: `https://mr-{MR_IID}-{PROJECT_SLUG}.review.bemade.org`
+- Login: `admin` / `review-admin`
+- Modules installed: changed modules detected from the MR diff (with demo data)
+- Resources: 1 CPU / 2Gi memory limit
+- Labeled with `app.kubernetes.io/part-of: odoo-review` for easy identification
+
+**Cleanup:** Instances are automatically deleted when the MR is merged or closed via GitLab's environment stop mechanism. You can also manually stop the environment from the GitLab UI (Deployments > Environments).
+
 ## Testing Approach
 
 The test stage uses the **OCA two-step testing approach**:
@@ -167,6 +202,8 @@ Set these in your GitLab project settings (Settings > CI/CD > Variables):
 | `TEST_BRANCHES` | Variable | Regex: branches that run tests |
 | `DEPLOY_BRANCHES` | Variable | Regex: branches that can deploy |
 | `DEPLOY_TARGETS` | File | YAML mapping branches to k8s targets |
+| `MR_TARGET_BRANCHES` | Variable | Regex: MR target branches that trigger build+test |
+| `REVIEW_ENABLED` | Variable | Set to `"true"` to enable review environments for MRs |
 
 ### Optional Variables
 

@@ -3,6 +3,7 @@
 #   TEST_BRANCHES     - which branches run tests (no fallback, unset = no tests)
 #   DEPLOY_BRANCHES   - which branches can deploy (no fallback, unset = no deploy)
 #   MR_TARGET_BRANCHES - target branches whose MRs trigger build+test (no fallback, unset = no MR pipelines)
+#   REVIEW_ENABLED    - set to "true" to deploy ephemeral review instances for MRs
 #   ALLOWED_BRANCHES  - legacy, used as fallback for BUILD_BRANCHES
 # Format: re2 regex, see https://github.com/google/re2
 
@@ -273,6 +274,168 @@ deploy:
         --type merge \
         --patch "{\"spec\":{\"image\":\"${CONTAINER_IMAGE}@${IMAGE_DIGEST}\"}}"
 
+# Review deploy - spins up an ephemeral OdooInstance for MR review
+# Set REVIEW_ENABLED=true to activate. Requires odoo-review namespace to exist.
+review-deploy:
+  stage: deploy
+  image: alpine/k8s:1.29.0
+  tags: [kubernetes]
+  needs:
+    - job: build
+      artifacts: true
+    - job: test
+      optional: true
+  rules:
+    - if: $REVIEW_ENABLED == "true" && $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
+      when: on_success
+    - when: never
+  environment:
+    name: review/${CI_MERGE_REQUEST_IID}
+    url: https://mr-${CI_MERGE_REQUEST_IID}-${CI_PROJECT_PATH_SLUG}.review.bemade.org
+    on_stop: review-stop
+  script:
+    - apk add --no-cache curl jq
+    - |
+      set -e
+
+      REVIEW_NS="odoo-review"
+      INSTANCE_NAME="${CI_PROJECT_PATH_SLUG}-mr-${CI_MERGE_REQUEST_IID}"
+      REVIEW_HOST="mr-${CI_MERGE_REQUEST_IID}-${CI_PROJECT_PATH_SLUG}.review.bemade.org"
+      REVIEW_URL="https://${REVIEW_HOST}"
+      CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
+
+      # Build modules list from changed-modules.txt, fall back to "base"
+      if [ -f changed-modules.txt ] && [ -s changed-modules.txt ]; then
+        # Convert comma-separated to JSON array: "a,b" -> "\"a\",\"b\""
+        MODULES_JSON=$(cat changed-modules.txt | tr ',' '\n' | sed 's/.*/"&"/' | tr '\n' ',' | sed 's/,$//')
+      else
+        MODULES_JSON='"base"'
+      fi
+
+      echo "Creating review instance: ${INSTANCE_NAME}"
+      echo "  Host: ${REVIEW_HOST}"
+      echo "  Modules: ${MODULES_JSON}"
+
+      cat <<INSTANCE_EOF | kubectl apply -f -
+      apiVersion: bemade.org/v1alpha1
+      kind: OdooInstance
+      metadata:
+        name: ${INSTANCE_NAME}
+        namespace: ${REVIEW_NS}
+        labels:
+          app.kubernetes.io/part-of: odoo-review
+          review/mr-iid: "${CI_MERGE_REQUEST_IID}"
+          review/project: "${CI_PROJECT_PATH_SLUG}"
+      spec:
+        image: "${CONTAINER_IMAGE}:test"
+        imagePullSecret: "registry.bemade.org"
+        adminPassword: "review-admin"
+        replicas: 1
+        cron:
+          replicas: 0
+        init:
+          enabled: true
+          demo: true
+          modules: [${MODULES_JSON}]
+        database:
+          cluster: "cnpg-1"
+        filestore:
+          storageSize: "1Gi"
+        ingress:
+          hosts:
+            - "${REVIEW_HOST}"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        configOptions:
+          addons_path: "/opt/odoo/odoo/addons,/opt/odoo/addons,/mnt/extra-addons,/mnt/enterprise-addons"
+      INSTANCE_EOF
+
+      # Post comment on the MR with the review URL
+      COMMENT_BODY="## Review Environment\n\n"
+      COMMENT_BODY="${COMMENT_BODY}Instance **${INSTANCE_NAME}** is being provisioned.\n\n"
+      COMMENT_BODY="${COMMENT_BODY}| | |\n|---|---|\n"
+      COMMENT_BODY="${COMMENT_BODY}| URL | ${REVIEW_URL} |\n"
+      COMMENT_BODY="${COMMENT_BODY}| Login | admin / review-admin |\n"
+      COMMENT_BODY="${COMMENT_BODY}| Modules | $(cat changed-modules.txt 2>/dev/null || echo 'base') |\n\n"
+      COMMENT_BODY="${COMMENT_BODY}The instance will be ready once database initialization completes (may take a few minutes)."
+
+      curl -s --request POST \
+        --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        --form "body=${COMMENT_BODY}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
+
+      echo "Review instance created. Waiting for it to become ready..."
+
+      # Poll for readiness (up to 10 minutes)
+      for i in $(seq 1 60); do
+        PHASE=$(kubectl get odooinstance "${INSTANCE_NAME}" -n "${REVIEW_NS}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+        echo "  Phase: ${PHASE} (attempt ${i}/60)"
+        case "$PHASE" in
+          Running)
+            echo "Review instance is ready at ${REVIEW_URL}"
+            exit 0
+            ;;
+          Error|InitFailed)
+            echo "ERROR: Review instance entered ${PHASE} phase"
+            exit 1
+            ;;
+        esac
+        sleep 10
+      done
+
+      echo "WARNING: Review instance did not become ready within 10 minutes (current phase: ${PHASE})"
+      echo "The instance may still be initializing. Check: kubectl get odooinstance ${INSTANCE_NAME} -n ${REVIEW_NS}"
+
+# Review stop - tears down the ephemeral review instance when MR is closed/merged
+review-stop:
+  stage: cleanup
+  image: alpine/k8s:1.29.0
+  tags: [kubernetes]
+  needs: []
+  rules:
+    - if: $REVIEW_ENABLED == "true" && $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
+      when: manual
+      allow_failure: true
+    - when: never
+  environment:
+    name: review/${CI_MERGE_REQUEST_IID}
+    action: stop
+  script:
+    - apk add --no-cache curl jq
+    - |
+      set -e
+
+      REVIEW_NS="odoo-review"
+      INSTANCE_NAME="${CI_PROJECT_PATH_SLUG}-mr-${CI_MERGE_REQUEST_IID}"
+
+      echo "Deleting review instance: ${INSTANCE_NAME}"
+      kubectl delete odooinstance "${INSTANCE_NAME}" -n "${REVIEW_NS}" --ignore-not-found
+
+      echo "=== Cleaning up MR container images ==="
+
+      REPO_PATH="${CONTAINER_IMAGE#*/}"
+      ENCODED_PATH=$(echo "$REPO_PATH" | sed 's|/|%2F|g')
+      API_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/registry/repositories"
+
+      REPO_ID=$(curl -s --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+        "${API_URL}" | jq -r ".[] | select(.path == \"${REPO_PATH}\") | .id")
+
+      if [ -n "$REPO_ID" ] && [ "$REPO_ID" != "null" ]; then
+        echo "Deleting registry repository ${REPO_PATH} (ID: ${REPO_ID})..."
+        curl -s --request DELETE --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          "${API_URL}/${REPO_ID}"
+        echo "Image cleanup complete."
+      else
+        echo "Registry repository not found for ${REPO_PATH} - nothing to clean up."
+      fi
+
+      echo "Review environment cleanup complete."
+
 # Cleanup stage - removes MR images from the container registry after build+test
 cleanup:
   stage: cleanup
@@ -282,6 +445,9 @@ cleanup:
     - job: test
       optional: true
   rules:
+    # Skip when review is enabled — review-stop handles image cleanup
+    - if: $REVIEW_ENABLED == "true"
+      when: never
     - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
       when: always
     - when: never
