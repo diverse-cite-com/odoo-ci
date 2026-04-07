@@ -79,10 +79,13 @@ build:
     - bash /tmp/odoo-ci/scripts/build.sh
     # Copy CI scripts for use in test stage
     - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py /tmp/odoo-ci/scripts/filter_no_ci.py ci-scripts/
+    # List all project addons (directories with __manifest__.py) for review instances
+    - ls -d addons/*/__manifest__.py 2>/dev/null | sed 's|addons/||;s|/__manifest__.py||' | tr '\n' ',' | sed 's/,$//' > project-addons.txt
   artifacts:
     paths:
       - image-digest.txt
       - changed-modules.txt
+      - project-addons.txt
       - ci-scripts/
     expire_in: 1 hour
 
@@ -304,10 +307,10 @@ review-deploy:
       REVIEW_URL="https://${REVIEW_HOST}"
       CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
 
-      # Build modules list from changed-modules.txt, fall back to "base"
+      # Build modules list from project-addons.txt, fall back to "base"
       MODULES_RAW=""
-      if [ -f changed-modules.txt ]; then
-        MODULES_RAW=$(cat changed-modules.txt | tr -d '[:space:]')
+      if [ -f project-addons.txt ]; then
+        MODULES_RAW=$(cat project-addons.txt | tr -d '[:space:]')
       fi
       if [ -n "$MODULES_RAW" ]; then
         # Convert comma-separated to JSON array: "a,b" -> "\"a\",\"b\""
@@ -365,7 +368,7 @@ review-deploy:
       COMMENT_BODY="${COMMENT_BODY}| | |\n|---|---|\n"
       COMMENT_BODY="${COMMENT_BODY}| URL | ${REVIEW_URL} |\n"
       COMMENT_BODY="${COMMENT_BODY}| Login | admin / admin |\n"
-      COMMENT_BODY="${COMMENT_BODY}| Modules | $(cat changed-modules.txt 2>/dev/null || echo 'base') |\n\n"
+      COMMENT_BODY="${COMMENT_BODY}| Modules | $(cat project-addons.txt 2>/dev/null || echo 'base') |\n\n"
       COMMENT_BODY="${COMMENT_BODY}The instance will be ready once database initialization completes (may take a few minutes)."
 
       curl -s --request POST \
