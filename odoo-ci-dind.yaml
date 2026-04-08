@@ -360,6 +360,7 @@ review-deploy:
             memory: 2Gi
         configOptions:
           addons_path: "/opt/odoo/odoo/addons,/opt/odoo/addons,/mnt/extra-addons,/mnt/enterprise-addons"
+          workers: "2"
       INSTANCE_EOF
 
       # Post comment on the MR with the review URL
