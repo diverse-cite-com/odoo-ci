@@ -367,6 +367,8 @@ review-deploy:
         configOptions:
           addons_path: "${ADDONS_PATH}"
           workers: "2"
+          limit_time_real: "1200"
+          limit_time_cpu: "1200"
       INSTANCE_EOF
 
       # Post comment on the MR with the review URL
