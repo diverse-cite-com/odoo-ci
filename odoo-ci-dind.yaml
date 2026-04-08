@@ -319,6 +319,12 @@ review-deploy:
         MODULES_JSON='"base"'
       fi
 
+      # Set addons_path based on enterprise vs community
+      ADDONS_PATH="/mnt/extra-addons"
+      if [ -z "$COMMUNITY" ]; then
+        ADDONS_PATH="${ADDONS_PATH},/mnt/enterprise-addons"
+      fi
+
       echo "Creating review instance: ${INSTANCE_NAME}"
       echo "  Host: ${REVIEW_HOST}"
       echo "  Modules: ${MODULES_JSON}"
@@ -359,7 +365,7 @@ review-deploy:
             cpu: 1000m
             memory: 2Gi
         configOptions:
-          addons_path: "/opt/odoo/odoo/addons,/opt/odoo/addons,/mnt/extra-addons,/mnt/enterprise-addons"
+          addons_path: "${ADDONS_PATH}"
           workers: "2"
       INSTANCE_EOF
 
