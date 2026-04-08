@@ -372,17 +372,26 @@ review-deploy:
       INSTANCE_EOF
 
       # Post comment on the MR with the review URL
-      COMMENT_BODY="## Review Environment\n\n"
-      COMMENT_BODY="${COMMENT_BODY}Instance **${INSTANCE_NAME}** is being provisioned.\n\n"
-      COMMENT_BODY="${COMMENT_BODY}| | |\n|---|---|\n"
-      COMMENT_BODY="${COMMENT_BODY}| URL | ${REVIEW_URL} |\n"
-      COMMENT_BODY="${COMMENT_BODY}| Login | admin / admin |\n"
-      COMMENT_BODY="${COMMENT_BODY}| Modules | $(cat project-addons.txt 2>/dev/null || echo 'base') |\n\n"
-      COMMENT_BODY="${COMMENT_BODY}The instance will be ready once database initialization completes (may take a few minutes)."
+      MODULES_LIST=$(cat project-addons.txt 2>/dev/null || echo 'base')
+      COMMENT_BODY=$(cat <<COMMENT_EOF
+      ## Review Environment
+
+      Instance **${INSTANCE_NAME}** is being provisioned.
+
+      | | |
+      |---|---|
+      | URL | ${REVIEW_URL} |
+      | Login | admin / admin |
+      | Modules | ${MODULES_LIST} |
+
+      The instance will be ready once database initialization completes (may take a few minutes).
+      COMMENT_EOF
+      )
 
       curl -s --request POST \
         --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
-        --form "body=${COMMENT_BODY}" \
+        --header "Content-Type: application/json" \
+        --data "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
 
       echo "Review instance created. Waiting for it to become ready..."
