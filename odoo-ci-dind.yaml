@@ -394,27 +394,12 @@ review-deploy:
         --data "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
 
-      echo "Review instance created. Waiting for it to become ready..."
-
-      # Poll for readiness (up to 10 minutes)
-      for i in $(seq 1 60); do
-        PHASE=$(kubectl get odooinstance "${INSTANCE_NAME}" -n "${REVIEW_NS}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-        echo "  Phase: ${PHASE} (attempt ${i}/60)"
-        case "$PHASE" in
-          Running)
-            echo "Review instance is ready at ${REVIEW_URL}"
-            exit 0
-            ;;
-          Error|InitFailed)
-            echo "ERROR: Review instance entered ${PHASE} phase"
-            exit 1
-            ;;
-        esac
-        sleep 10
-      done
-
-      echo "WARNING: Review instance did not become ready within 10 minutes (current phase: ${PHASE})"
-      echo "The instance may still be initializing. Check: kubectl get odooinstance ${INSTANCE_NAME} -n ${REVIEW_NS}"
+      # Fire-and-forget: CR is applied, operator reconciles asynchronously.
+      # Reviewers can hit ${REVIEW_URL} directly; if the instance isn't ready
+      # yet they'll see it still initializing. Blocking the MR on a 10-minute
+      # poll just means slow Odoo boots fail the pipeline — not useful signal.
+      echo "Review instance CR applied. Operator will reconcile asynchronously."
+      echo "Status: kubectl get odooinstance ${INSTANCE_NAME} -n ${REVIEW_NS}"
 
 # Review stop - tears down the ephemeral review instance when MR is closed/merged
 review-stop:
