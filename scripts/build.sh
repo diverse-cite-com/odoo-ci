@@ -39,19 +39,47 @@ if [ -f ".odoo-deploy/odoo-ci/prepare-build.sh" ]; then
   bash .odoo-deploy/odoo-ci/prepare-build.sh
 fi
 
-# Convert symlinks in ./addons to full folders
-home="$(pwd)"
-if [ -d "./addons" ] && [ "$(ls -A ./addons)" ]; then
-  mkdir -p ./addons-new \
-  && cd ./addons-new \
-  && find ../addons -type l \
-    -exec sh -c 'target=$(readlink {}); link_name=$(basename {}); mv ${target#./} $link_name; rm {}' \;
-fi
-
-cd "$home"
-if [ -d "./addons-new" ] && [ "$(ls -A ./addons-new)" ]; then
-  mv -f ./addons-new/* ./addons/ \
-    && rm -rf addons-new
+# Materialize symlinks in ./addons into real directories.
+#
+# The Dockerfile downstream does `COPY ./addons /mnt/extra-addons`, which
+# preserves symlinks as symlinks. Anything pointing into `.repos/` would
+# end up dangling inside the image since `.repos/` is not part of the
+# COPY context.
+#
+# Previous implementation used `find -exec mv` + a fragile `${target#./}`
+# strip that handled `./relative` paths only. That silently failed on
+# `../path` and `../../path` symlinks (they'd be `mv`'d outside the repo,
+# the mv would error, find would not propagate the failure, and the
+# original symlink would survive into the image as a dangling link).
+# We hit this in diverse-odoo on `bemade_mail_gateway`, `login_as_any_user`
+# and `auto_database_backup`, which had `../../.repos/...` targets.
+#
+# New behaviour:
+#   * iterate symlinks at ./addons/* (any depth would be unusual)
+#   * resolve via `readlink -f` (absolute path, follows chains)
+#   * fail loudly if any symlink is broken — don't ship a known-bad image
+#   * cp -RL the resolved target into ./addons/<basename> so the COPY in
+#     the Dockerfile picks up real directories
+if [ -d "./addons" ]; then
+  broken_count=0
+  for link in $(find ./addons -maxdepth 1 -type l); do
+    if [ ! -e "$link" ]; then
+      target=$(readlink "$link")
+      echo "ERROR: broken addons symlink: $link -> $target" >&2
+      echo "  resolved against repo root: $(readlink -f "$link" 2>&1 || echo '(unresolvable)')" >&2
+      broken_count=$((broken_count + 1))
+      continue
+    fi
+    target_abs="$(readlink -f "$link")"
+    base="$(basename "$link")"
+    rm "$link"
+    cp -RL "$target_abs" "./addons/$base"
+  done
+  if [ "$broken_count" -gt 0 ]; then
+    echo "ERROR: $broken_count broken symlink(s) under ./addons/ — refusing to build" >&2
+    echo "  Fix the symlink targets (paths are relative to ./addons/) or remove them." >&2
+    exit 1
+  fi
 fi
 
 # Set build date
