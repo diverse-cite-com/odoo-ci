@@ -50,7 +50,7 @@ coverage run --source="/mnt/extra-addons" --branch \
   -i "$CHANGED_MODULES" \
   --test-enable \
   --stop-after-init \
-  --log-level=test
+  --log-level=warn
 
 # Generate coverage report
 echo "=== Coverage Report ==="
