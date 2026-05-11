@@ -461,7 +461,9 @@ upgrade-modules:
     - job: deploy
   variables:
     GIT_DEPTH: "0"
-    GIT_SUBMODULE_STRATEGY: recursive
+    # Deliberately not using GIT_SUBMODULE_STRATEGY: get_sources runs before
+    # before_script, so SSH isn't yet set up — auto-cloning would fail. We
+    # init submodules manually below, after the SSH bootstrap.
     UPGRADE_TIMEOUT_SECONDS: "1800"
   rules:
     - if: $DEPLOY_BRANCHES && $CI_COMMIT_BRANCH =~ $DEPLOY_BRANCHES
@@ -470,7 +472,11 @@ upgrade-modules:
       when: on_success
     - when: never
   before_script:
-    - apk add --no-cache python3 yq jq
+    - apk add --no-cache python3 git openssh-client yq jq
+    - *setup_ssh
+    # Full clone (no --depth): we need history reachable from both the old
+    # and new pointer SHAs to diff the submodule.
+    - git submodule update --init --recursive
   script:
     - |
       set -e
