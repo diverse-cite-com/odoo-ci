@@ -32,15 +32,26 @@ import sys
 from pathlib import Path
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> str:
-    result = subprocess.run(
-        cmd, cwd=cwd, check=True, capture_output=True, text=True
-    )
-    return result.stdout
+def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> tuple[int, str, str]:
+    """Run a subprocess; return (rc, stdout, stderr).
+
+    If `check` is True (default), exits the script with a descriptive
+    message when the command fails. Callers that want to handle failure
+    themselves pass check=False.
+    """
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise SystemExit(
+            f"command failed: {' '.join(cmd)}\n"
+            f"  cwd: {cwd}\n"
+            f"  stderr: {result.stderr.strip()}"
+        )
+    return result.returncode, result.stdout, result.stderr
 
 
 def current_branch(repo: Path) -> str:
-    return run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo).strip()
+    _, out, _ = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
+    return out.strip()
 
 
 def derive_base(head: str) -> str:
@@ -53,7 +64,7 @@ def derive_base(head: str) -> str:
 
 
 def changed_paths(base: str, head: str, repo: Path) -> list[str]:
-    out = run(["git", "diff", "--name-only", f"{base}...{head}"], repo)
+    _, out, _ = run(["git", "diff", "--name-only", f"{base}...{head}"], repo)
     return [line for line in out.splitlines() if line]
 
 
@@ -61,7 +72,7 @@ def submodule_sha_changes(
     base: str, head: str, repo: Path
 ) -> dict[str, tuple[str, str]]:
     """Return {submodule_path: (old_sha, new_sha)} for bumped submodules."""
-    out = run(["git", "diff", f"{base}...{head}", "--", ".repos"], repo)
+    _, out, _ = run(["git", "diff", f"{base}...{head}", "--", ".repos"], repo)
     changes: dict[str, tuple[str, str]] = {}
     current_path: str | None = None
     old_sha: str | None = None
@@ -137,13 +148,14 @@ def modules_from_submodule_diff(
     sub_root = repo / sub_path
     if not sub_root.is_dir():
         return set()
-    try:
-        out = run(
-            ["git", "diff", "--name-only", f"{old_sha}..{new_sha}"], sub_root
-        )
-    except subprocess.CalledProcessError as exc:
+    rc, out, err = run(
+        ["git", "diff", "--name-only", f"{old_sha}..{new_sha}"],
+        sub_root,
+        check=False,
+    )
+    if rc != 0:
         print(
-            f"warning: could not diff submodule {sub_path}: {exc.stderr}",
+            f"warning: could not diff submodule {sub_path}: {err.strip()}",
             file=sys.stderr,
         )
         return set()

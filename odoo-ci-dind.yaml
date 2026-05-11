@@ -511,10 +511,14 @@ upgrade-modules:
         echo "Branch ${CI_COMMIT_BRANCH} does not match *-staging convention - skipping."
         exit 0
       fi
-      git fetch --no-tags origin "${BASE_BRANCH}:${BASE_BRANCH}" 2>/dev/null || \
-        git fetch --no-tags origin "${BASE_BRANCH}" || true
+      # Fetch base branch into a remote-tracking ref that we then reference
+      # explicitly; the local branch may not exist on a detached checkout.
+      git fetch --no-tags origin "+${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+      BASE_REF="origin/${BASE_BRANCH}"
+      git rev-parse --verify "${BASE_REF}" >/dev/null
+      git rev-parse --verify "${CI_COMMIT_SHA}" >/dev/null
 
-      python3 "$DIFF_SCRIPT" --base "$BASE_BRANCH" --head "$CI_COMMIT_BRANCH" -o staging-refresh.json
+      python3 "$DIFF_SCRIPT" --base "$BASE_REF" --head "$CI_COMMIT_SHA" -o staging-refresh.json
       cat staging-refresh.json
 
       MODULES_JSON=$(jq -c '.modules' staging-refresh.json)
@@ -604,12 +608,15 @@ upgrade-modules-preview:
         exit 0
       fi
 
-      BASE="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      BASE_BRANCH="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
       HEAD="${CI_COMMIT_SHA}"
 
-      # Make sure target branch and submodule history are available locally.
-      git fetch --no-tags origin "${BASE}:${BASE}" 2>/dev/null || \
-        git fetch --no-tags origin "${BASE}" || true
+      # Fetch target branch into remote-tracking ref to avoid relying on a
+      # local branch (the checkout is detached).
+      git fetch --no-tags origin "+${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
+      BASE="origin/${BASE_BRANCH}"
+      git rev-parse --verify "${BASE}" >/dev/null
+      git rev-parse --verify "${HEAD}" >/dev/null
       git submodule foreach 'git fetch --no-tags origin || true' >/dev/null 2>&1 || true
 
       python3 "$DIFF_SCRIPT" --base "$BASE" --head "$HEAD" -o staging-refresh.json
@@ -622,7 +629,7 @@ upgrade-modules-preview:
         BODY="${MARKER}
       ## Module install/upgrade preview
 
-      No modules touched relative to \`${BASE}\` — refreshing the deployed instance for this branch will be a no-op."
+      No modules touched relative to \`${BASE_BRANCH}\` — refreshing the deployed instance for this branch will be a no-op."
       else
         MOD_LIST=$(echo "$MODULES" | sed 's/^/- `/;s/$/`/')
         BODY="${MARKER}
@@ -632,7 +639,7 @@ upgrade-modules-preview:
 
       ${MOD_LIST}
 
-      _Computed from \`git diff ${BASE}...${HEAD:0:8}\` by \`scripts/staging_diff.py\`._"
+      _Computed from \`git diff ${BASE_BRANCH}...${HEAD:0:8}\` by \`scripts/staging_diff.py\`._"
       fi
 
       if [ -z "${CI_BOT_TOKEN:-}" ]; then
