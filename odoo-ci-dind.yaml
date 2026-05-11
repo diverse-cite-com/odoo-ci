@@ -78,7 +78,7 @@ build:
   script:
     - bash /tmp/odoo-ci/scripts/build.sh
     # Copy CI scripts for use in test stage
-    - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py /tmp/odoo-ci/scripts/filter_no_ci.py ci-scripts/
+    - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py /tmp/odoo-ci/scripts/filter_no_ci.py /tmp/odoo-ci/scripts/staging_diff.py ci-scripts/
     # List all project addons (directories with __manifest__.py) for review instances
     - ls -d addons/*/__manifest__.py 2>/dev/null | sed 's|addons/||;s|/__manifest__.py||' | tr '\n' ',' | sed 's/,$//' > project-addons.txt
   artifacts:
@@ -445,6 +445,125 @@ review-stop:
       fi
 
       echo "Review environment cleanup complete."
+
+# Upgrade modules - runs OdooUpgradeJob against the deployed instance based on
+# the install/upgrade list computed by scripts/staging_diff.py (bundled from
+# odoo-ci and shipped as a build artifact at ci-scripts/staging_diff.py).
+# Skipped if the head branch doesn't match *-staging or if the diff is empty.
+# Runs in the same conditions as `deploy` and only after it succeeds.
+upgrade-modules:
+  stage: deploy
+  image: alpine/k8s:1.29.0
+  tags: [kubernetes]
+  needs:
+    - job: build
+      artifacts: true
+    - job: deploy
+  variables:
+    GIT_DEPTH: "0"
+    GIT_SUBMODULE_STRATEGY: recursive
+    UPGRADE_TIMEOUT_SECONDS: "1800"
+  rules:
+    - if: $DEPLOY_BRANCHES && $CI_COMMIT_BRANCH =~ $DEPLOY_BRANCHES
+      when: on_success
+    - if: $STAGING_BRANCH && $STAGING_BRANCH == $CI_COMMIT_REF_NAME
+      when: on_success
+    - when: never
+  before_script:
+    - apk add --no-cache python3 yq jq
+  script:
+    - |
+      set -e
+
+      DIFF_SCRIPT="ci-scripts/staging_diff.py"
+      if [ ! -f "$DIFF_SCRIPT" ]; then
+        echo "Bundled staging diff script not found at ${DIFF_SCRIPT} - cannot proceed."
+        exit 1
+      fi
+
+      # Resolve deploy target (mirrors logic in the deploy job).
+      CONFIG_FILE=""
+      if [ -n "$DEPLOY_TARGETS" ] && [ -f "$DEPLOY_TARGETS" ]; then
+        CONFIG_FILE="$DEPLOY_TARGETS"
+      elif [ -f .odoo-ci.yml ]; then
+        CONFIG_FILE=".odoo-ci.yml"
+      fi
+      if [ -n "$CONFIG_FILE" ]; then
+        DEPLOY_NAMESPACE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].namespace" "$CONFIG_FILE" 2>/dev/null || echo "")
+        DEPLOY_INSTANCE=$(yq -r ".targets[] | select(has(\"${CI_COMMIT_BRANCH}\")) | .[\"${CI_COMMIT_BRANCH}\"].instance" "$CONFIG_FILE" 2>/dev/null || echo "")
+      fi
+      DEPLOY_NAMESPACE="${DEPLOY_NAMESPACE:-$KUBECTL_NAMESPACE}"
+      DEPLOY_INSTANCE="${DEPLOY_INSTANCE:-$ODOO_INSTANCE_NAME}"
+      if [ -z "$DEPLOY_NAMESPACE" ] || [ -z "$DEPLOY_INSTANCE" ]; then
+        echo "ERROR: Upgrade target not configured for branch ${CI_COMMIT_BRANCH}"
+        exit 1
+      fi
+
+      # Derive base branch by stripping `-staging` (project convention).
+      BASE_BRANCH="${CI_COMMIT_BRANCH%-staging}"
+      if [ "$BASE_BRANCH" = "$CI_COMMIT_BRANCH" ]; then
+        echo "Branch ${CI_COMMIT_BRANCH} does not match *-staging convention - skipping."
+        exit 0
+      fi
+      git fetch --no-tags origin "${BASE_BRANCH}:${BASE_BRANCH}" 2>/dev/null || \
+        git fetch --no-tags origin "${BASE_BRANCH}" || true
+
+      python3 "$DIFF_SCRIPT" --base "$BASE_BRANCH" --head "$CI_COMMIT_BRANCH" -o staging-refresh.json
+      cat staging-refresh.json
+
+      MODULES_JSON=$(jq -c '.modules' staging-refresh.json)
+      if [ "$MODULES_JSON" = "[]" ] || [ -z "$MODULES_JSON" ] || [ "$MODULES_JSON" = "null" ]; then
+        echo "No modules to install or upgrade - skipping OdooUpgradeJob creation."
+        exit 0
+      fi
+
+      JOB_NAME="upgrade-${CI_COMMIT_SHORT_SHA}-$(date +%s)"
+      echo "Creating OdooUpgradeJob ${JOB_NAME} for ${DEPLOY_NAMESPACE}/${DEPLOY_INSTANCE}"
+      echo "  modules: ${MODULES_JSON}"
+
+      cat <<UJEOF | kubectl apply -f -
+      apiVersion: bemade.org/v1alpha1
+      kind: OdooUpgradeJob
+      metadata:
+        name: ${JOB_NAME}
+        namespace: ${DEPLOY_NAMESPACE}
+        labels:
+          app.kubernetes.io/managed-by: gitlab-ci
+          ci/commit-sha: "${CI_COMMIT_SHORT_SHA}"
+          ci/pipeline-id: "${CI_PIPELINE_ID}"
+      spec:
+        odooInstanceRef:
+          name: ${DEPLOY_INSTANCE}
+        modules: ${MODULES_JSON}
+        modulesInstall: ${MODULES_JSON}
+      UJEOF
+
+      # Poll for completion. The operator owns retries/backoff; CI just waits.
+      DEADLINE=$(( $(date +%s) + UPGRADE_TIMEOUT_SECONDS ))
+      while [ $(date +%s) -lt $DEADLINE ]; do
+        PHASE=$(kubectl get odooupgradejob "${JOB_NAME}" -n "${DEPLOY_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+        echo "  phase=${PHASE:-(pending)}"
+        case "$PHASE" in
+          Completed)
+            echo "OdooUpgradeJob completed successfully."
+            exit 0
+            ;;
+          Failed)
+            echo "OdooUpgradeJob failed:"
+            kubectl describe odooupgradejob "${JOB_NAME}" -n "${DEPLOY_NAMESPACE}" || true
+            exit 1
+            ;;
+        esac
+        sleep 15
+      done
+      echo "Timeout (${UPGRADE_TIMEOUT_SECONDS}s) waiting for OdooUpgradeJob ${JOB_NAME}."
+      kubectl describe odooupgradejob "${JOB_NAME}" -n "${DEPLOY_NAMESPACE}" || true
+      exit 1
+  artifacts:
+    when: always
+    paths:
+      - staging-refresh.json
+    expire_in: 1 week
 
 # Cleanup stage - removes MR images from the container registry after build+test
 cleanup:
