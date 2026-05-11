@@ -584,13 +584,16 @@ upgrade-modules-preview:
       artifacts: true
   variables:
     GIT_DEPTH: "0"
-    GIT_SUBMODULE_STRATEGY: recursive
+    # See upgrade-modules: SSH isn't set up at get_sources time, so we init
+    # submodules manually after the SSH bootstrap below.
   rules:
     - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
       when: on_success
     - when: never
   before_script:
-    - apk add --no-cache python3 git jq curl
+    - apk add --no-cache python3 git openssh-client jq curl
+    - *setup_ssh
+    - git submodule update --init --recursive
   script:
     - |
       set -e
