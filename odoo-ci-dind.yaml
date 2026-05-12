@@ -71,6 +71,9 @@ build:
     DOCKER_DRIVER: overlay2
     DOCKER_BUILDKIT: "1"
     DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
+    # Full history so staging_diff.py can compute base...head and follow
+    # submodule pointer bumps without "unknown revision" errors.
+    GIT_DEPTH: "0"
   before_script:
     - apk add --no-cache git openssh-client bash shadow
     - *setup_ssh
@@ -81,11 +84,38 @@ build:
     - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py /tmp/odoo-ci/scripts/filter_no_ci.py /tmp/odoo-ci/scripts/staging_diff.py ci-scripts/
     # List all project addons (directories with __manifest__.py) for review instances
     - ls -d addons/*/__manifest__.py 2>/dev/null | sed 's|addons/||;s|/__manifest__.py||' | tr '\n' ',' | sed 's/,$//' > project-addons.txt
+    # Compute install/upgrade module list for downstream deploy/preview jobs.
+    # For *-staging pushes: base = branch minus "-staging".
+    # For MRs: base = MR target branch. Otherwise: emit empty list.
+    - |
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        DIFF_BASE_BRANCH="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      elif [ "${CI_COMMIT_BRANCH%-staging}" != "${CI_COMMIT_BRANCH}" ]; then
+        DIFF_BASE_BRANCH="${CI_COMMIT_BRANCH%-staging}"
+      else
+        DIFF_BASE_BRANCH=""
+      fi
+      if [ -n "$DIFF_BASE_BRANCH" ]; then
+        apk add --no-cache python3
+        git fetch --no-tags origin "+${DIFF_BASE_BRANCH}:refs/remotes/origin/${DIFF_BASE_BRANCH}"
+        # build.sh inits submodules with --recommend-shallow; deepen each so
+        # off-default-branch pointer SHAs from base resolve when diffing.
+        git submodule foreach --recursive 'git fetch --unshallow --no-tags origin "+refs/heads/*:refs/remotes/origin/*" 2>/dev/null || git fetch --no-tags origin "+refs/heads/*:refs/remotes/origin/*" || true'
+        python3 ci-scripts/staging_diff.py \
+          --base "origin/${DIFF_BASE_BRANCH}" \
+          --head "${CI_COMMIT_SHA}" \
+          -o staging-refresh.json
+        cat staging-refresh.json
+      else
+        echo '{"base":null,"head":"'"${CI_COMMIT_SHA}"'","modules":[]}' > staging-refresh.json
+        echo "No base branch (not *-staging, not an MR) - empty staging-refresh.json."
+      fi
   artifacts:
     paths:
       - image-digest.txt
       - changed-modules.txt
       - project-addons.txt
+      - staging-refresh.json
       - ci-scripts/
     expire_in: 1 hour
 
@@ -447,10 +477,9 @@ review-stop:
       echo "Review environment cleanup complete."
 
 # Upgrade modules - runs OdooUpgradeJob against the deployed instance based on
-# the install/upgrade list computed by scripts/staging_diff.py (bundled from
-# odoo-ci and shipped as a build artifact at ci-scripts/staging_diff.py).
-# Skipped if the head branch doesn't match *-staging or if the diff is empty.
-# Runs in the same conditions as `deploy` and only after it succeeds.
+# the install/upgrade list precomputed by the build job (staging-refresh.json
+# artifact). Skipped silently if the list is empty. Runs in the same
+# conditions as `deploy` and only after it succeeds.
 upgrade-modules:
   stage: deploy
   image: alpine/k8s:1.29.0
@@ -459,12 +488,9 @@ upgrade-modules:
     - job: build
       artifacts: true
     - job: deploy
-  variables:
-    GIT_DEPTH: "0"
-    # Deliberately not using GIT_SUBMODULE_STRATEGY: get_sources runs before
-    # before_script, so SSH isn't yet set up — auto-cloning would fail. We
-    # init submodules manually below, after the SSH bootstrap.
-    UPGRADE_TIMEOUT_SECONDS: "1800"
+  # No timeout in-script: rely on GitLab's job timeout (Settings → CI/CD →
+  # General → Timeout) to bound the wait. Set it generously per project —
+  # populated DBs with migrations can take hours.
   rules:
     - if: $DEPLOY_BRANCHES && $CI_COMMIT_BRANCH =~ $DEPLOY_BRANCHES
       when: on_success
@@ -472,20 +498,16 @@ upgrade-modules:
       when: on_success
     - when: never
   before_script:
-    - apk add --no-cache python3 git openssh-client yq jq
-    - *setup_ssh
-    # Full clone (no --depth): we need history reachable from both the old
-    # and new pointer SHAs to diff the submodule.
-    - git submodule update --init --recursive
+    - apk add --no-cache yq jq
   script:
     - |
       set -e
 
-      DIFF_SCRIPT="ci-scripts/staging_diff.py"
-      if [ ! -f "$DIFF_SCRIPT" ]; then
-        echo "Bundled staging diff script not found at ${DIFF_SCRIPT} - cannot proceed."
+      if [ ! -f staging-refresh.json ]; then
+        echo "staging-refresh.json artifact not found from build job - cannot proceed."
         exit 1
       fi
+      cat staging-refresh.json
 
       # Resolve deploy target (mirrors logic in the deploy job).
       CONFIG_FILE=""
@@ -504,22 +526,6 @@ upgrade-modules:
         echo "ERROR: Upgrade target not configured for branch ${CI_COMMIT_BRANCH}"
         exit 1
       fi
-
-      # Derive base branch by stripping `-staging` (project convention).
-      BASE_BRANCH="${CI_COMMIT_BRANCH%-staging}"
-      if [ "$BASE_BRANCH" = "$CI_COMMIT_BRANCH" ]; then
-        echo "Branch ${CI_COMMIT_BRANCH} does not match *-staging convention - skipping."
-        exit 0
-      fi
-      # Fetch base branch into a remote-tracking ref that we then reference
-      # explicitly; the local branch may not exist on a detached checkout.
-      git fetch --no-tags origin "+${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
-      BASE_REF="origin/${BASE_BRANCH}"
-      git rev-parse --verify "${BASE_REF}" >/dev/null
-      git rev-parse --verify "${CI_COMMIT_SHA}" >/dev/null
-
-      python3 "$DIFF_SCRIPT" --base "$BASE_REF" --head "$CI_COMMIT_SHA" -o staging-refresh.json
-      cat staging-refresh.json
 
       MODULES_JSON=$(jq -c '.modules' staging-refresh.json)
       if [ "$MODULES_JSON" = "[]" ] || [ -z "$MODULES_JSON" ] || [ "$MODULES_JSON" = "null" ]; then
@@ -548,9 +554,9 @@ upgrade-modules:
         modulesInstall: ${MODULES_JSON}
       UJEOF
 
-      # Poll for completion. The operator owns retries/backoff; CI just waits.
-      DEADLINE=$(( $(date +%s) + UPGRADE_TIMEOUT_SECONDS ))
-      while [ $(date +%s) -lt $DEADLINE ]; do
+      # Poll for completion. The operator owns retries/backoff; CI just
+      # waits. GitLab's job timeout bounds total runtime.
+      while true; do
         PHASE=$(kubectl get odooupgradejob "${JOB_NAME}" -n "${DEPLOY_NAMESPACE}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
         echo "  phase=${PHASE:-(pending)}"
         case "$PHASE" in
@@ -566,9 +572,6 @@ upgrade-modules:
         esac
         sleep 15
       done
-      echo "Timeout (${UPGRADE_TIMEOUT_SECONDS}s) waiting for OdooUpgradeJob ${JOB_NAME}."
-      kubectl describe odooupgradejob "${JOB_NAME}" -n "${DEPLOY_NAMESPACE}" || true
-      exit 1
   artifacts:
     when: always
     paths:
@@ -577,8 +580,8 @@ upgrade-modules:
 
 # Upgrade modules preview - on MR pipelines, posts (or updates) a sticky note
 # on the MR showing which modules will be installed/upgraded if it merges.
-# Pure-signal: no cluster mutation. Uses the same diff script as the
-# upgrade-modules deploy job, with the MR's target/source as base/head.
+# Pure-signal: no cluster mutation. Reads the precomputed staging-refresh.json
+# artifact from the build job — no git, no submodules, no SSH needed here.
 upgrade-modules-preview:
   stage: test
   image: alpine:latest
@@ -587,41 +590,25 @@ upgrade-modules-preview:
     - job: build
       artifacts: true
   variables:
-    GIT_DEPTH: "0"
-    # See upgrade-modules: SSH isn't set up at get_sources time, so we init
-    # submodules manually after the SSH bootstrap below.
+    GIT_STRATEGY: none
   rules:
     - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
       when: on_success
     - when: never
   before_script:
-    - apk add --no-cache python3 git openssh-client jq curl
-    - *setup_ssh
-    - git submodule update --init --recursive
+    - apk add --no-cache jq curl
   script:
     - |
       set -e
 
-      DIFF_SCRIPT="ci-scripts/staging_diff.py"
-      if [ ! -f "$DIFF_SCRIPT" ]; then
-        echo "Bundled staging diff script not found at ${DIFF_SCRIPT} - skipping."
+      if [ ! -f staging-refresh.json ]; then
+        echo "staging-refresh.json artifact not found from build job - skipping preview."
         exit 0
       fi
+      cat staging-refresh.json
 
       BASE_BRANCH="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
       HEAD="${CI_COMMIT_SHA}"
-
-      # Fetch target branch into remote-tracking ref to avoid relying on a
-      # local branch (the checkout is detached).
-      git fetch --no-tags origin "+${BASE_BRANCH}:refs/remotes/origin/${BASE_BRANCH}"
-      BASE="origin/${BASE_BRANCH}"
-      git rev-parse --verify "${BASE}" >/dev/null
-      git rev-parse --verify "${HEAD}" >/dev/null
-      git submodule foreach 'git fetch --no-tags origin || true' >/dev/null 2>&1 || true
-
-      python3 "$DIFF_SCRIPT" --base "$BASE" --head "$HEAD" -o staging-refresh.json
-      cat staging-refresh.json
-
       MODULES=$(jq -r '.modules[]' staging-refresh.json)
       MARKER='<!-- upgrade-modules-preview -->'
 
