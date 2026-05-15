@@ -85,30 +85,39 @@ build:
     # List all project addons (directories with __manifest__.py) for review instances
     - ls -d addons/*/__manifest__.py 2>/dev/null | sed 's|addons/||;s|/__manifest__.py||' | tr '\n' ',' | sed 's/,$//' > project-addons.txt
     # Compute install/upgrade module list for downstream deploy/preview jobs.
+    # For MRs: base = MR target branch (preview instance applies MR changes on top).
     # For *-staging pushes: base = branch minus "-staging".
-    # For MRs: base = MR target branch. Otherwise: emit empty list.
+    # Otherwise (push to any other branch, e.g. post-merge to a major version):
+    #   base = CI_COMMIT_BEFORE_SHA (previous tip of this same branch).
     - |
+      DIFF_BASE_REF=""
+      DIFF_BASE_BRANCH=""
       if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
         DIFF_BASE_BRANCH="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+        DIFF_BASE_REF="origin/${DIFF_BASE_BRANCH}"
       elif [ "${CI_COMMIT_BRANCH%-staging}" != "${CI_COMMIT_BRANCH}" ]; then
         DIFF_BASE_BRANCH="${CI_COMMIT_BRANCH%-staging}"
-      else
-        DIFF_BASE_BRANCH=""
+        DIFF_BASE_REF="origin/${DIFF_BASE_BRANCH}"
+      elif [ -n "$CI_COMMIT_BEFORE_SHA" ] && [ "$CI_COMMIT_BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+        # Push to a regular branch: diff against this branch's previous tip.
+        DIFF_BASE_REF="$CI_COMMIT_BEFORE_SHA"
       fi
-      if [ -n "$DIFF_BASE_BRANCH" ]; then
+      if [ -n "$DIFF_BASE_REF" ]; then
         apk add --no-cache python3
-        git fetch --no-tags origin "+${DIFF_BASE_BRANCH}:refs/remotes/origin/${DIFF_BASE_BRANCH}"
+        if [ -n "$DIFF_BASE_BRANCH" ]; then
+          git fetch --no-tags origin "+${DIFF_BASE_BRANCH}:refs/remotes/origin/${DIFF_BASE_BRANCH}"
+        fi
         # build.sh inits submodules with --recommend-shallow; deepen each so
         # off-default-branch pointer SHAs from base resolve when diffing.
         git submodule foreach --recursive 'git fetch --unshallow --no-tags origin "+refs/heads/*:refs/remotes/origin/*" 2>/dev/null || git fetch --no-tags origin "+refs/heads/*:refs/remotes/origin/*" || true'
         python3 ci-scripts/staging_diff.py \
-          --base "origin/${DIFF_BASE_BRANCH}" \
+          --base "${DIFF_BASE_REF}" \
           --head "${CI_COMMIT_SHA}" \
           -o staging-refresh.json
         cat staging-refresh.json
       else
         echo '{"base":null,"head":"'"${CI_COMMIT_SHA}"'","modules":[]}' > staging-refresh.json
-        echo "No base branch (not *-staging, not an MR) - empty staging-refresh.json."
+        echo "No base ref (new branch or force-push) - empty staging-refresh.json."
       fi
   artifacts:
     paths:
