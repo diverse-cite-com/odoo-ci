@@ -72,7 +72,10 @@ def submodule_sha_changes(
     base: str, head: str, repo: Path
 ) -> dict[str, tuple[str, str]]:
     """Return {submodule_path: (old_sha, new_sha)} for bumped submodules."""
-    _, out, _ = run(["git", "diff", f"{base}...{head}", "--", ".repos"], repo)
+    _, out, _ = run(
+        ["git", "diff", "--submodule=short", f"{base}...{head}", "--", ".repos"],
+        repo,
+    )
     changes: dict[str, tuple[str, str]] = {}
     current_path: str | None = None
     old_sha: str | None = None
