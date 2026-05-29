@@ -17,6 +17,12 @@ the same name-only diff between the old and new submodule SHAs and maps
 modified module directories back to the `addons/<name>` symlinks that
 expose them to Odoo. Modules not exposed via `addons/` are ignored.
 
+Diffing a submodule requires BOTH pin SHAs to be present in the (often
+shallow) submodule clone. When the base pin is missing the script fetches
+it, and if it still cannot resolve, it EXITS NON-ZERO rather than returning
+a partial list — silently dropping a submodule's modules would ship them to
+prod un-migrated.
+
 This script is bundled in the odoo-ci repo and operates on whichever
 project directory is passed via --repo (default: current working
 directory), so individual projects don't need to vendor it.
@@ -141,6 +147,32 @@ def addons_symlink_map(addons_dir: Path) -> dict[Path, str]:
     return mapping
 
 
+def ensure_commit(sha: str, sub_root: Path) -> bool:
+    """Ensure `sha` is present in the submodule clone, fetching it if missing.
+
+    CI clones submodules shallow (``--recommend-shallow``), so a base pin that
+    is an ancestor — or worse, an off-default-branch SHA — of the checked-out
+    commit is often absent. Try the cheapest recovery first (fetch the exact
+    object, which works when the server allows reachable-SHA fetches), then
+    fall back to deepening the whole clone.
+    """
+    def present() -> bool:
+        rc, _, _ = run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], sub_root, check=False)
+        return rc == 0
+
+    if present():
+        return True
+    for fetch_args in (
+        ["git", "fetch", "--no-tags", "origin", sha],
+        ["git", "fetch", "--no-tags", "--unshallow", "origin"],
+        ["git", "fetch", "--no-tags", "origin", "+refs/heads/*:refs/remotes/origin/*"],
+    ):
+        run(fetch_args, sub_root, check=False)
+        if present():
+            return True
+    return False
+
+
 def modules_from_submodule_diff(
     repo: Path,
     sub_path: str,
@@ -151,17 +183,28 @@ def modules_from_submodule_diff(
     sub_root = repo / sub_path
     if not sub_root.is_dir():
         return set()
+    # Both endpoints must be present locally or the diff silently yields nothing,
+    # which would emit a PARTIAL upgrade list (modules in this submodule dropped)
+    # while the pipeline stays green — the exact failure that shipped un-migrated
+    # modules to prod. Fail loud instead.
+    for sha in (old_sha, new_sha):
+        if not ensure_commit(sha, sub_root):
+            raise SystemExit(
+                f"error: submodule {sub_path}: commit {sha} is not available "
+                f"locally and could not be fetched. Refusing to emit a partial "
+                f"upgrade list — deepen the submodule clone (full history or "
+                f"fetch the base pin) and re-run."
+            )
     rc, out, err = run(
         ["git", "diff", "--name-only", f"{old_sha}..{new_sha}"],
         sub_root,
         check=False,
     )
     if rc != 0:
-        print(
-            f"warning: could not diff submodule {sub_path}: {err.strip()}",
-            file=sys.stderr,
+        raise SystemExit(
+            f"error: submodule {sub_path}: `git diff {old_sha}..{new_sha}` failed: "
+            f"{err.strip()}"
         )
-        return set()
     found: set[str] = set()
     for line in out.splitlines():
         if not line:
