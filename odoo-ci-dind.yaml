@@ -717,3 +717,27 @@ cleanup:
       else
         echo "Registry repository not found for ${REPO_PATH} - nothing to clean up."
       fi
+
+# ---------------------------------------------------------------------------
+# Release train (step 6 of the RC flow): on a daily SCHEDULE, promote each
+# rc-<branch> into its release branch via scripts/release_train.sh. Opt-in per
+# project by setting RELEASE_BRANCHES (space-separated, e.g. "18.0 19.0") and
+# adding a scheduled pipeline — unset = never runs (like DEPLOY_BRANCHES etc.).
+# Needs the .setup_ssh key to have push rights to the protected release branches.
+# ---------------------------------------------------------------------------
+release_train:
+  stage: deploy
+  tags: [kubernetes]
+  image: alpine
+  rules:
+    - if: $RELEASE_BRANCHES && $CI_PIPELINE_SOURCE == "schedule"
+      when: always
+    - when: never
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - apk add --no-cache git openssh-client bash
+    - *setup_ssh
+  script:
+    - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
+    - bash /tmp/odoo-ci/scripts/release_train.sh
