@@ -10,14 +10,15 @@
 #
 # Env:
 #   RELEASE_BRANCHES    required, e.g. "18.0 19.0"
-#   RELEASE_TRAIN_TOKEN required — token with rights to merge MRs into the
-#                       protected release branches (Maintainer / Allowed-to-merge)
+#   CI_BOT_TOKEN required — existing group CI var (bot access token); the bot
+#                       needs `api` scope AND Allowed-to-merge on the protected
+#                       release branches.
 #   CI_API_V4_URL, CI_PROJECT_ID  (GitLab-provided)
 set -uo pipefail
 : "${RELEASE_BRANCHES:?RELEASE_BRANCHES not set}"
-: "${RELEASE_TRAIN_TOKEN:?RELEASE_TRAIN_TOKEN not set (needs MR-merge rights on the protected release branches)}"
+: "${CI_BOT_TOKEN:?CI_BOT_TOKEN not set (needs MR-merge rights on the protected release branches)}"
 API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
-AUTH=(--header "PRIVATE-TOKEN: ${RELEASE_TRAIN_TOKEN}")
+AUTH=(--header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}")
 fail=0
 for ver in $RELEASE_BRANCHES; do
   rc="rc-${ver}"
