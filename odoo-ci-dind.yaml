@@ -718,12 +718,14 @@ cleanup:
         echo "Registry repository not found for ${REPO_PATH} - nothing to clean up."
       fi
 
+
 # ---------------------------------------------------------------------------
-# Release train (step 6 of the RC flow): on a daily SCHEDULE, promote each
-# rc-<branch> into its release branch via scripts/release_train.sh. Opt-in per
-# project by setting RELEASE_BRANCHES (space-separated, e.g. "18.0 19.0") and
-# adding a scheduled pipeline — unset = never runs (like DEPLOY_BRANCHES etc.).
-# Needs the .setup_ssh key to have push rights to the protected release branches.
+# Release train (step 6 of the RC flow): on a daily SCHEDULE, MERGE the standing
+# rc-<branch> -> <branch> MR (the "release PR" the task-worker accumulates) via
+# the GitLab API. Release branches are PROTECTED — this merges, never pushes.
+# Opt-in per project: set RELEASE_BRANCHES (e.g. "18.0 19.0") + RELEASE_TRAIN_TOKEN
+# (a token allowed to merge into the protected release branches) + a daily
+# scheduled pipeline. Unset RELEASE_BRANCHES = never runs.
 # ---------------------------------------------------------------------------
 release_train:
   stage: deploy
@@ -733,11 +735,9 @@ release_train:
     - if: $RELEASE_BRANCHES && $CI_PIPELINE_SOURCE == "schedule"
       when: always
     - when: never
-  variables:
-    GIT_DEPTH: "0"
   before_script:
-    - apk add --no-cache git openssh-client bash
+    - apk add --no-cache git openssh-client bash curl jq
     - *setup_ssh
-  script:
     - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
+  script:
     - bash /tmp/odoo-ci/scripts/release_train.sh

@@ -1,49 +1,39 @@
 #!/usr/bin/env bash
-# release_train.sh — daily "release train" promotion.
+# release_train.sh — daily "release train" via scheduled MR MERGE.
 #
-# For each release branch named in RELEASE_BRANCHES (space-separated, e.g.
-# "18.0 19.0"), if a release-candidate branch `rc-<branch>` exists, merge it
-# INTO the release branch and push, then sync the rc branch back up to the
-# release branch (so rc stays "release + pending-approved", never drifting).
+# Release branches are PROTECTED: nobody can push or force-push them, so changes
+# reach them ONLY by merging an MR. The task-worker accumulates client-approved
+# tasks onto rc-<branch> and keeps an open MR  rc-<branch> -> <branch>  (the
+# "release PR"). This job, on a daily schedule, MERGES that MR via the GitLab API
+# for each branch in RELEASE_BRANCHES. A merge (unlike a push) respects branch
+# protection, so it just needs a token allowed to merge into the release branch.
 #
-# The task-worker accumulates client-approved tasks onto `rc-<branch>` via
-# cherry-pick (RC-promotion scan); this job is step 6 — promoting that approved
-# subset to the live release branch on a daily schedule.
-#
-# A conflict in either direction aborts THAT branch and fails the job (so GitLab
-# notifies); other release branches still process. Requires the .setup_ssh key
-# to have push rights to the (protected) release branches.
-#
-# Env: RELEASE_BRANCHES (required), CI_PROJECT_PATH (GitLab-provided).
+# Env:
+#   RELEASE_BRANCHES    required, e.g. "18.0 19.0"
+#   RELEASE_TRAIN_TOKEN required — token with rights to merge MRs into the
+#                       protected release branches (Maintainer / Allowed-to-merge)
+#   CI_API_V4_URL, CI_PROJECT_ID  (GitLab-provided)
 set -uo pipefail
-: "${RELEASE_BRANCHES:?RELEASE_BRANCHES not set (e.g. \"18.0 19.0\")}"
-
-git config user.email "release-train@bemade.org"
-git config user.name  "release-train"
-# Push over SSH (CI_JOB_TOKEN can't push protected branches); .setup_ssh keyed it.
-git remote set-url --push origin "git@git.bemade.org:${CI_PROJECT_PATH}.git"
-git fetch --prune --quiet origin
-
+: "${RELEASE_BRANCHES:?RELEASE_BRANCHES not set}"
+: "${RELEASE_TRAIN_TOKEN:?RELEASE_TRAIN_TOKEN not set (needs MR-merge rights on the protected release branches)}"
+API="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}"
+AUTH=(--header "PRIVATE-TOKEN: ${RELEASE_TRAIN_TOKEN}")
 fail=0
 for ver in $RELEASE_BRANCHES; do
   rc="rc-${ver}"
-  if ! git ls-remote --exit-code --heads origin "$rc" >/dev/null 2>&1; then
-    echo "::: [$ver] no $rc branch yet — nothing to promote"; continue
-  fi
-  echo "::: [$ver] promote $rc -> $ver"
-  git checkout -B "$ver" "origin/$ver" --quiet
-  if ! git merge --no-ff --no-edit -m "release-train: promote $rc -> $ver [skip ci]" "origin/$rc"; then
-    echo "!!! [$ver] CONFLICT merging $rc into $ver — aborting this branch"; git merge --abort; fail=1; continue
-  fi
-  if ! git push origin "HEAD:$ver"; then echo "!!! [$ver] push to $ver FAILED"; fail=1; continue; fi
-  # Keep rc current with the (now-advanced) release branch — fast-forward expected.
-  git checkout -B "$rc" "origin/$rc" --quiet
-  if git merge --ff-only "origin/$ver" --quiet 2>/dev/null; then
-    git push origin "HEAD:$rc" || echo "    [$ver] (warn) sync push of $rc failed"
+  mr=$(curl -sf "${AUTH[@]}" "${API}/merge_requests?state=opened&source_branch=${rc}&target_branch=${ver}" || echo '[]')
+  iid=$(echo "$mr" | jq -r '.[0].iid // empty')
+  if [ -z "$iid" ]; then echo "::: [$ver] no open ${rc} -> ${ver} MR — nothing to promote"; continue; fi
+  status=$(echo "$mr" | jq -r '.[0].detailed_merge_status // .[0].merge_status // "unknown"')
+  echo "::: [$ver] merging MR !${iid} (${rc} -> ${ver}); status=${status}"
+  code=$(curl -s -o /tmp/rt_merge.json -w '%{http_code}' --request PUT "${AUTH[@]}" \
+           --data "merge_when_pipeline_succeeds=false" "${API}/merge_requests/${iid}/merge" || echo 000)
+  if [ "$code" = "200" ]; then
+    echo "    [$ver] merged MR !${iid}"
   else
-    echo "    [$ver] (warn) $rc not fast-forwardable to $ver — left as-is; will reconcile next run"
+    echo "!!! [$ver] merge FAILED (HTTP ${code}): $(jq -r '.message // .' /tmp/rt_merge.json 2>/dev/null | head -c 200)"
+    fail=1
   fi
-  echo "    [$ver] promoted OK"
 done
-[ "$fail" -eq 0 ] || { echo "release-train: one or more branches failed"; exit 1; }
+[ "$fail" -eq 0 ] || { echo "release-train: one or more merges failed (conflict / not mergeable / perms)"; exit 1; }
 echo "release-train: all clean"
