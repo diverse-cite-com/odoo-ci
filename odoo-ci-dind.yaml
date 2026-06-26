@@ -741,3 +741,24 @@ release_train:
     - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
   script:
     - bash /tmp/odoo-ci/scripts/release_train.sh
+
+# Enforce the module-versioning convention: any module changed in an MR must
+# bump its __manifest__.py version vs the target branch. Opt-in per project via
+# the VERSION_BUMP_CHECK CI/CD variable ("true"). See
+# https://github.com/bemade/pre-commit-hooks and odoo-project-guide §7.
+version_bump_check:
+  stage: test
+  tags: [kubernetes]
+  image: python:3.12-slim
+  variables:
+    GIT_DEPTH: 0  # full history so the merge-base for the diff is available
+  rules:
+    - if: $VERSION_BUMP_CHECK == "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && $MR_TARGET_BRANCHES && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
+      when: always
+    - when: never
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git >/dev/null
+    - pip install --quiet "bemade-pre-commit-hooks @ git+https://github.com/bemade/pre-commit-hooks@v0.1.0"
+  script:
+    - git fetch --quiet origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - bemade-check-version-bump --against "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
