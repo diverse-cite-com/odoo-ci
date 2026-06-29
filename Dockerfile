@@ -25,12 +25,13 @@ RUN BUILD_PKGS=$(cat /tmp/build-packages.txt | tr '\n' ' ') \
 
 # uv is already installed in the base image, no action needed
 
-# Copy addons
-COPY --chown=odoo:odoo ./addons /mnt/extra-addons
-COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/
-
-# Install requirements from file if present
-# Use uv with venv for CI images, system for production
+# Install Python requirements BEFORE copying addons. requirements.txt rarely
+# changes, while addons change on most commits; doing the dependency install
+# first means a code-only change busts only the addons COPY layer below and
+# the (cached) pip-install layer is reused. With the persistent BuildKit cache
+# this turns most builds into a near-instant COPY + push.
+# Use uv with venv for CI images, system for production.
+COPY --chown=odoo:odoo requirements.txt /mnt/extra-addons/requirements.txt
 RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
       if [ -d /opt/odoo-venv ]; then \
         uv pip install --python /opt/odoo-venv/bin/python -r /mnt/extra-addons/requirements.txt; \
@@ -38,3 +39,7 @@ RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
         uv pip install --system --break-system-packages -r /mnt/extra-addons/requirements.txt; \
       fi \
     fi
+
+# Copy addons last (changes on most commits) so the dependency layer above
+# stays cached across code-only changes.
+COPY --chown=odoo:odoo ./addons /mnt/extra-addons

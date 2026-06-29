@@ -66,12 +66,26 @@ build:
   # kube-gitops/buildkit/). This drops a privileged sidecar and its per-job
   # startup, and keeps a warm layer cache across builds.
   variables:
-    DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
+    # NB: no DOCKER_AUTH_CONFIG. Registry auth for pull/push is handled by the
+    # `docker login` in build.sh (forwarded to remote buildkitd per-build), and
+    # the runner ServiceAccount's imagePullSecrets cover job/base image pulls.
+    # The old malformed value ({"username":...,"password":...} instead of a
+    # base64 "auth") only produced a recurring credential-store warning.
+    #
     # Endpoint of the shared in-cluster BuildKit daemon (overridable per project).
     BUILDKIT_HOST: tcp://buildkitd.gitlab-runner.svc.cluster.local:1234
     # Full history so staging_diff.py can compute base...head and follow
     # submodule pointer bumps without "unknown revision" errors.
     GIT_DEPTH: "0"
+  # Cache the submodule checkout (.repos/) in MinIO so warm builds do delta
+  # fetches instead of full clones. Stable per-project key: restore the latest
+  # .repos, `git submodule update` fetches only new objects, then save it back.
+  # Harmless no-op until the runner's S3 cache backend is configured.
+  cache:
+    key: "${CI_PROJECT_PATH_SLUG}-repos"
+    paths:
+      - .repos/
+    policy: pull-push
   before_script:
     - apk add --no-cache git openssh-client bash shadow
     - *setup_ssh
