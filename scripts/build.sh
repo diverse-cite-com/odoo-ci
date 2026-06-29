@@ -18,10 +18,11 @@ if [ -z "$CI_REGISTRY" ] || [ -z "$CI_DEPLOY_USER" ] || [ -z "$CI_DEPLOY_PASSWOR
   exit 1
 fi
 
-# Check docker is running or fail fast
-docker image ls
-
-# Login to Docker registry or fail fast
+# Builds run against the persistent in-cluster BuildKit (remote buildx
+# driver), so there is no local Docker daemon to probe. `docker login` below
+# only writes ~/.docker/config.json, which buildx forwards to the remote
+# buildkitd as THIS job's registry credentials (to pull the base image and
+# push the result). buildkitd holds no static credentials of its own.
 echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
 
 # Set up SSH
@@ -97,8 +98,17 @@ BUILD_DATE=$(date +%Y-%m-%d)
 # Ensure optional files exist (empty is fine, Dockerfile handles it)
 touch requirements.txt build-packages.txt runtime-packages.txt
 
-# Setup buildx
-docker buildx create --use --name builder 2>/dev/null || docker buildx use builder
+# Setup buildx against the persistent in-cluster BuildKit daemon (remote
+# driver) instead of a throwaway dind buildkit. This keeps a warm layer cache
+# (base image, apt, pip) on the buildkitd PVC across builds, so the base image
+# isn't re-pulled and unchanged layers are reused. BUILDKIT_HOST defaults to
+# the in-cluster service and is overridable (e.g. for local testing).
+BUILDKIT_HOST="${BUILDKIT_HOST:-tcp://buildkitd.gitlab-runner.svc.cluster.local:1234}"
+docker buildx create --name remote-builder --driver remote --use "${BUILDKIT_HOST}" 2>/dev/null \
+  || docker buildx use remote-builder
+# Fail fast if buildkitd is unreachable (replaces the old `docker image ls`
+# daemon check, which is meaningless now there is no local daemon).
+docker buildx inspect --bootstrap
 
 # Determine which target group to build
 if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then

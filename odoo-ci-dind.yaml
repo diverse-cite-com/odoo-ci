@@ -61,16 +61,14 @@ build:
     - if: $ALLOWED_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: always
     - when: never
-  services:
-    - name: docker:dind
-      alias: docker
-      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  # No docker:dind service: builds run against the persistent in-cluster
+  # BuildKit daemon via the remote buildx driver (see scripts/build.sh and
+  # kube-gitops/buildkit/). This drops a privileged sidecar and its per-job
+  # startup, and keeps a warm layer cache across builds.
   variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
-    DOCKER_DRIVER: overlay2
-    DOCKER_BUILDKIT: "1"
     DOCKER_AUTH_CONFIG: '{"auths":{"${CI_REGISTRY}":{"username":"${CI_DEPLOY_USER}","password":"${CI_DEPLOY_PASSWORD}"}}}'
+    # Endpoint of the shared in-cluster BuildKit daemon (overridable per project).
+    BUILDKIT_HOST: tcp://buildkitd.gitlab-runner.svc.cluster.local:1234
     # Full history so staging_diff.py can compute base...head and follow
     # submodule pointer bumps without "unknown revision" errors.
     GIT_DEPTH: "0"

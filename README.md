@@ -176,11 +176,19 @@ your-project/
 
 ## Build Performance
 
-The build stage uses **Docker BuildKit** with `buildx bake` for:
+The build stage uses **Docker BuildKit** (`buildx bake`) against a **persistent
+in-cluster BuildKit daemon** (the remote buildx driver), not a throwaway
+`docker:dind`:
 
-- **Parallel builds**: Production and test images build simultaneously
-- **Inline caching**: Layers are cached in the registry for faster rebuilds
-- **Latest Docker**: Uses the latest Docker-in-Docker for best performance
+- **Parallel builds**: production and test images build simultaneously
+- **Warm layer cache**: `buildkitd` keeps base-image, apt and pip layers on a
+  PVC across builds, so the base image isn't re-pulled and unchanged layers are
+  reused. Cache size is bounded by BuildKit GC (LRU). See
+  [`kube-gitops/buildkit/`](https://git.bemade.org/bemade/kube-gitops).
+- **No privileged dind sidecar**: each build job's own registry credentials are
+  forwarded to the shared `buildkitd` per-build, so it holds no static creds.
+- **Parallel submodule clone**: `--jobs 8` so the project's submodules fetch
+  concurrently instead of serially.
 
 ## CI/CD Variables
 
