@@ -142,10 +142,17 @@ BUILDX_BAKE_ENTITLEMENTS_FS=0 \
 docker buildx bake --push \
   --set "*.platform=linux/amd64" \
   --set "*.dockerfile=${dockerfile}" \
+  --set "*.pull=true" \
   --provenance=false \
   --sbom=false \
   -f "${ODOO_CI_DIR}/docker-bake.hcl" \
   ${BAKE_TARGET}
+# --set "*.pull=true": re-resolve the FROM tag (e.g. odoo-enterprise-ci:19.0,
+# a MUTABLE tag) against the registry on every build. The persistent buildkitd
+# otherwise reuses its cached tag->digest resolution and could build on a stale
+# base for up to the GC window when docker-odoo-enterprise re-pushes the tag.
+# This is only a cheap manifest check: if the digest is unchanged the cached
+# layers are reused (no re-download); if it moved, only the delta is pulled.
 
 # Get the digest from the pushed image
 if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
