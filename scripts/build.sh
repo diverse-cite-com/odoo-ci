@@ -38,7 +38,19 @@ source "${SCRIPT_DIR}/setup_ssh.sh"
 #   that commit ("reference is not a tree"). odoo-ci-dind.yaml deepens
 #   submodules later (git submodule foreach ... fetch --unshallow) for the
 #   staging_diff step.
-git submodule update --init --recursive --recommend-shallow --jobs 8
+#
+# Self-healing: the CI cache restores .repos/ + .git/modules/ together, but if
+# that pair is ever inconsistent (e.g. a partial/old cache, or a submodule
+# gitlink whose .git/modules dir is missing) the update aborts with "could not
+# get a repository handle". Rather than fail the build, deinit + purge the
+# submodule state and re-clone clean.
+git submodule sync --recursive || true
+if ! git submodule update --init --recursive --recommend-shallow --jobs 8; then
+  echo "submodule update failed (stale/inconsistent cache?) - purging and retrying clean"
+  git submodule deinit -f --all || true
+  rm -rf .git/modules/.repos .repos || true
+  git submodule update --init --recursive --recommend-shallow --jobs 8
+fi
 
 # Single Dockerfile for both enterprise and community
 # (docker-bake.hcl handles base image selection via COMMUNITY flag)
