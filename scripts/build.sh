@@ -155,21 +155,29 @@ else
 fi
 docker buildx imagetools inspect "${CONTAINER_IMAGE}:${DIGEST_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"' > image-digest.txt
 
-# Detect changed modules if testing is enabled
+# Detect changed modules if testing is enabled. The alpine `docker` job image
+# has no python3, so guard on its presence: without it we just emit an empty
+# list (changed-modules.txt is currently advisory and unconsumed downstream).
+# This avoids the recurring "python3: command not found" noise in build logs.
 if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ] || [ -n "$TEST_BRANCHES" ] || [ "$TEST_ENABLED" = "true" ]; then
-  echo "Detecting changed modules..."
-  CODEPENDS_FLAG=""
-  if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
-    CODEPENDS_FLAG="--include-codepends"
-  fi
+  if command -v python3 >/dev/null 2>&1; then
+    echo "Detecting changed modules..."
+    CODEPENDS_FLAG=""
+    if [ "$TEST_INCLUDE_CODEPENDS" = "true" ]; then
+      CODEPENDS_FLAG="--include-codepends"
+    fi
 
-  python3 "${SCRIPT_DIR}/detect_changed_modules.py" \
-    --addons-dir ./addons \
-    --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
-    --head-ref "${CI_COMMIT_SHA:-HEAD}" \
-    --output comma \
-    --verbose \
-    $CODEPENDS_FLAG > changed-modules.txt || echo "" > changed-modules.txt
+    python3 "${SCRIPT_DIR}/detect_changed_modules.py" \
+      --addons-dir ./addons \
+      --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
+      --head-ref "${CI_COMMIT_SHA:-HEAD}" \
+      --output comma \
+      --verbose \
+      $CODEPENDS_FLAG > changed-modules.txt || echo "" > changed-modules.txt
+  else
+    echo "python3 not available in build image - skipping changed-module detection."
+    echo "" > changed-modules.txt
+  fi
 
   echo "Changed modules: $(cat changed-modules.txt)"
 fi
