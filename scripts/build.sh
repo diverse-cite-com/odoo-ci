@@ -27,8 +27,17 @@ echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}
 # Set up SSH
 source "${SCRIPT_DIR}/setup_ssh.sh"
 
-# Clone submodules
-git submodule update --init --recursive --recommend-shallow
+# Clone submodules.
+# --jobs 8: fetch the (~18) submodules in parallel rather than serially.
+#   This was ~3m40s of wall-clock on durpro builds, dominated by per-repo
+#   SSH round-trips, and is the single largest pre-Docker cost in the build.
+# --recommend-shallow: honour `shallow = true` in .gitmodules where set.
+#   We deliberately do NOT force a blanket --depth 1: several submodules are
+#   pinned at non-tip SHAs, and a forced shallow fetch can fail to contain
+#   that commit ("reference is not a tree"). odoo-ci-dind.yaml deepens
+#   submodules later (git submodule foreach ... fetch --unshallow) for the
+#   staging_diff step.
+git submodule update --init --recursive --recommend-shallow --jobs 8
 
 # Single Dockerfile for both enterprise and community
 # (docker-bake.hcl handles base image selection via COMMUNITY flag)

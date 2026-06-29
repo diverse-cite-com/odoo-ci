@@ -205,24 +205,40 @@ test:
         --log-level=warn \
         --stop-after-init 2>&1 | tee test-output.log | oca_checklog_odoo
 
-      # Step 2: Install and test only the non-excluded addons
+      # Step 2: Install and test only the non-excluded addons.
+      # Coverage instrumentation (especially --branch) adds meaningful
+      # runtime. The coverage report is only actioned on MRs (the MR widget
+      # and diff annotations), so on push pipelines (post-merge, staging,
+      # release) we run Odoo bare for a faster gate and skip the report.
       echo "Running tests on our addons (full log in test-output.log)..."
-      unbuffer coverage run --include "${ADDONS_DIR}/*" --branch \
-        $(which odoo) \
-        -d ${PGDATABASE} \
-        -i ${TEST_ADDONS} \
-        --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
-        --test-enable \
-        --http-interface=127.0.0.1 \
-        --log-level=warn \
-        --stop-after-init 2>&1 | tee -a test-output.log | oca_checklog_odoo
-      
-      # Generate coverage report
-      echo "=== Coverage Report ==="
-      coverage report | tee -a test-output.log
-      coverage xml -o coverage.xml
-      coverage html -d htmlcov
-      
+      if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
+        unbuffer coverage run --include "${ADDONS_DIR}/*" --branch \
+          $(which odoo) \
+          -d ${PGDATABASE} \
+          -i ${TEST_ADDONS} \
+          --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
+          --test-enable \
+          --http-interface=127.0.0.1 \
+          --log-level=warn \
+          --stop-after-init 2>&1 | tee -a test-output.log | oca_checklog_odoo
+
+        # Generate coverage report (MR pipelines only)
+        echo "=== Coverage Report ==="
+        coverage report | tee -a test-output.log
+        coverage xml -o coverage.xml
+        coverage html -d htmlcov
+      else
+        echo "Push pipeline - skipping coverage instrumentation."
+        unbuffer $(which odoo) \
+          -d ${PGDATABASE} \
+          -i ${TEST_ADDONS} \
+          --addons-path=${ADDONS_PATH},${ADDONS_DIR} \
+          --test-enable \
+          --http-interface=127.0.0.1 \
+          --log-level=warn \
+          --stop-after-init 2>&1 | tee -a test-output.log | oca_checklog_odoo
+      fi
+
       echo "=== Tests completed successfully ==="
   after_script:
     # Generate JUnit XML report from test log (script passed as artifact from build)
