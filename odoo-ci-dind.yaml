@@ -51,6 +51,10 @@ build:
   stage: build
   tags: [kubernetes]
   image: docker
+  # Stale builds for a superseded MR/branch commit are worthless once a newer
+  # pipeline exists for the same ref — let auto-cancel kill them outright
+  # rather than letting them run to completion and act on the cluster later.
+  interruptible: true
   rules:
     # MR pipelines
     - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
@@ -151,6 +155,7 @@ test:
   stage: test
   tags: [kubernetes]
   image: ${CONTAINER_IMAGE}:test
+  interruptible: true
   needs: ["build"]
   dependencies:
     - "build"
@@ -356,6 +361,10 @@ review-deploy:
   stage: deploy
   image: alpine/k8s:1.29.0
   tags: [kubernetes]
+  # A superseded MR commit's review-deploy must never win a race against the
+  # head commit's review-deploy/review-stop — auto-cancel kills this job
+  # outright once a newer pipeline exists for the same MR ref.
+  interruptible: true
   needs:
     - job: build
       artifacts: true
@@ -629,6 +638,7 @@ upgrade-modules-preview:
   stage: test
   image: alpine:latest
   tags: [kubernetes]
+  interruptible: true
   needs:
     - job: build
       artifacts: true
