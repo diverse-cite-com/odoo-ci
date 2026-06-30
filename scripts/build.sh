@@ -132,17 +132,55 @@ else
   BAKE_TARGET="default"
 fi
 
-# Build and push all targets in one command using buildx bake
+# Build each target to a LOCAL OCI archive instead of pushing directly.
+#
+# Why not `--push`: pushing straight from buildx makes BuildKit try to
+# cross-repository-mount layers it already knows live in OTHER projects' repos
+# (the shared persistent buildkitd content store accumulates identical base/
+# apt/pip layers from every Odoo project, tagged with their
+# containerd.io/distribution.source.<repo> labels). The mount needs *pull*
+# scope on those source repos, so buildx requests a single registry token
+# spanning this repo (pull,push) PLUS every source repo (pull). The source
+# repos are private and this project's deploy token can't read them, and this
+# GitLab rejects the whole combined token request with `insufficient_scope`
+# rather than granting a partial token -> the push dies.
+#
+# A local OCI archive carries no foreign distribution-source labels, so the
+# subsequent `skopeo copy` simply uploads our blobs to our repo using only this
+# project's deploy token (write_registry). The build itself is unchanged, so we
+# keep the warm buildkitd cache (the actual time-saver); only the push hop
+# differs. Identical blobs are deduped server-side by digest, so re-uploading
+# costs bandwidth, not storage.
+# Force a single tag per OCI archive: the production target normally carries
+# two tags (:BUILD_DATE and :latest), and a multi-tag OCI export yields a layout
+# that `skopeo copy` rejects as ambiguous. The in-archive tag is irrelevant -
+# skopeo pushes to whatever dest we name below - so collapse production to one.
+case "$BAKE_TARGET" in
+  test-only)
+    BAKE_OUTPUTS=( --set "test.output=type=oci,dest=test-image.tar" )
+    ;;
+  default)
+    BAKE_OUTPUTS=( --set "production.output=type=oci,dest=prod-image.tar" \
+                   --set "production.tags=${CONTAINER_IMAGE}:latest" )
+    ;;
+  with-test)
+    BAKE_OUTPUTS=( --set "production.output=type=oci,dest=prod-image.tar" \
+                   --set "production.tags=${CONTAINER_IMAGE}:latest" \
+                   --set "test.output=type=oci,dest=test-image.tar" )
+    ;;
+esac
+
 ODOO_VERSION=${ODOO_VERSION} \
 REGISTRY=${CI_REGISTRY} \
 CONTAINER_IMAGE=${CONTAINER_IMAGE} \
 BUILD_DATE=${BUILD_DATE} \
 COMMUNITY=${COMMUNITY:-} \
 BUILDX_BAKE_ENTITLEMENTS_FS=0 \
-docker buildx bake --push \
+docker buildx bake \
   --set "*.platform=linux/amd64" \
   --set "*.dockerfile=${dockerfile}" \
   --set "*.pull=true" \
+  "${BAKE_OUTPUTS[@]}" \
   --provenance=false \
   --sbom=false \
   -f "${ODOO_CI_DIR}/docker-bake.hcl" \
@@ -154,13 +192,31 @@ docker buildx bake --push \
 # This is only a cheap manifest check: if the digest is unchanged the cached
 # layers are reused (no re-download); if it moved, only the delta is pulled.
 
-# Get the digest from the pushed image
+# Push the built archive(s) with skopeo, using this project's deploy token.
+# skopeo lives in the alpine `community` repo; pin the fallback to the running
+# release branch so it matches the `docker` job image's alpine version.
+if ! apk add --no-cache skopeo; then
+  ALPINE_BRANCH="v$(cut -d. -f1,2 /etc/alpine-release)"
+  echo "https://dl-cdn.alpinelinux.org/alpine/${ALPINE_BRANCH}/community" >> /etc/apk/repositories
+  apk add --no-cache skopeo
+fi
+
+DEST_CREDS="${CI_DEPLOY_USER}:${CI_DEPLOY_PASSWORD}"
+if [ -f test-image.tar ]; then
+  skopeo copy --dest-creds "$DEST_CREDS" oci-archive:test-image.tar "docker://${CONTAINER_IMAGE}:test"
+fi
+if [ -f prod-image.tar ]; then
+  skopeo copy --dest-creds "$DEST_CREDS" oci-archive:prod-image.tar "docker://${CONTAINER_IMAGE}:${BUILD_DATE}"
+  skopeo copy --dest-creds "$DEST_CREDS" oci-archive:prod-image.tar "docker://${CONTAINER_IMAGE}:latest"
+fi
+
+# Record the pushed manifest digest for the downstream deploy job.
 if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
   DIGEST_TAG="test"
 else
   DIGEST_TAG="latest"
 fi
-docker buildx imagetools inspect "${CONTAINER_IMAGE}:${DIGEST_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"' > image-digest.txt
+skopeo inspect --creds "$DEST_CREDS" --format '{{.Digest}}' "docker://${CONTAINER_IMAGE}:${DIGEST_TAG}" > image-digest.txt
 
 # Detect changed modules if testing is enabled. The alpine `docker` job image
 # has no python3, so guard on its presence: without it we just emit an empty
