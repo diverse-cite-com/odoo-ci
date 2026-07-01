@@ -101,8 +101,8 @@ Ephemeral Odoo instances for merge request review, similar to Odoo's runbot.
 
 **How it works:**
 1. MR is created → build + test run as normal
-2. `review-deploy` creates an OdooInstance with demo data in the `odoo-review` namespace
-3. A comment is posted on the MR with the review URL and login credentials
+2. `review-deploy` creates an OdooInstance with demo data in the `odoo-review` namespace and posts a "provisioning" comment on the MR
+3. `review-wait` polls the instance until it's actually `Running`, then posts a follow-up "Ready" comment — or an "Init Failed" comment (with the init job's log attached as a pipeline artifact) if it doesn't come up within `REVIEW_READY_TIMEOUT_SECONDS`
 4. When the MR is merged or closed, GitLab auto-triggers `review-stop` which deletes the instance and cleans up the container image
 
 **Setup:**
@@ -117,6 +117,12 @@ Ephemeral Odoo instances for merge request review, similar to Odoo's runbot.
 3. Set the CI variable in your project:
    ```
    REVIEW_ENABLED = "true"
+   ```
+
+4. (Optional) If your module set installs slowly (large addon/demo-data
+   count), raise the wait timeout — default is 1800s (30 min):
+   ```
+   REVIEW_READY_TIMEOUT_SECONDS = "3600"
    ```
 
 **Review instance details:**
@@ -219,6 +225,7 @@ Set these in your GitLab project settings (Settings > CI/CD > Variables):
 |----------|---------|-------------|
 | `ODOO_VERSION` | `18.0` | Odoo version for base image |
 | `ODOO_CI_REF` | `main` | Branch of odoo-ci repo to use |
+| `REVIEW_READY_TIMEOUT_SECONDS` | `1800` | How long `review-wait` polls before giving up on a review instance becoming `Running` |
 
 ## Local Testing
 

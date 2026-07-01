@@ -466,7 +466,7 @@ review-deploy:
       | Login | admin / admin |
       | Modules | ${MODULES_LIST} |
 
-      The instance will be ready once database initialization completes (may take a few minutes).
+      Database initialization is running now — the \`review-wait\` job will post a follow-up comment once it's actually ready (or report why it failed).
       COMMENT_EOF
       )
 
@@ -476,12 +476,110 @@ review-deploy:
         --data "$(jq -n --arg body "$COMMENT_BODY" '{body: $body}')" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
 
-      # Fire-and-forget: CR is applied, operator reconciles asynchronously.
-      # Reviewers can hit ${REVIEW_URL} directly; if the instance isn't ready
-      # yet they'll see it still initializing. Blocking the MR on a 10-minute
-      # poll just means slow Odoo boots fail the pipeline — not useful signal.
+      # CR is applied, operator reconciles asynchronously. This job doesn't
+      # block on readiness — review-wait (next job) polls and reports the
+      # real outcome, so a slow boot doesn't fail *this* job for no reason.
       echo "Review instance CR applied. Operator will reconcile asynchronously."
       echo "Status: kubectl get odooinstance ${INSTANCE_NAME} -n ${REVIEW_NS}"
+
+# Review wait - polls the OdooInstance created by review-deploy until it's
+# actually Running (or InitFailed), and reports the real outcome on the MR.
+# Bounded by REVIEW_READY_TIMEOUT_SECONDS (default 30 min; override per
+# project for large module/demo-data sets) so a merely-slow boot doesn't
+# hang the job forever — but a genuine init failure fails this job for real
+# and attaches the init job's log as an artifact.
+review-wait:
+  stage: deploy
+  image: alpine/k8s:1.29.0
+  tags: [kubernetes]
+  interruptible: true
+  needs:
+    - job: review-deploy
+  rules:
+    - if: $REVIEW_ENABLED == "true" && $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
+      when: on_success
+    - when: never
+  timeout: 45m
+  artifacts:
+    when: on_failure
+    expire_in: 1 week
+    paths:
+      - review-init.log
+  script:
+    - apk add --no-cache curl jq
+    - |
+      set -e
+
+      REVIEW_NS="odoo-review"
+      INSTANCE_NAME="${CI_PROJECT_PATH_SLUG}-mr-${CI_MERGE_REQUEST_IID}"
+      REVIEW_URL="https://mr-${CI_MERGE_REQUEST_IID}-${CI_PROJECT_PATH_SLUG}.review.bemade.org"
+      TIMEOUT_SECONDS="${REVIEW_READY_TIMEOUT_SECONDS:-1800}"
+      POLL_INTERVAL=15
+      ELAPSED=0
+
+      post_comment() {
+        curl -s --request POST \
+          --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+          --header "Content-Type: application/json" \
+          --data "$(jq -n --arg body "$1" '{body: $body}')" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes" > /dev/null
+      }
+
+      dump_init_log() {
+        POD=$(kubectl get pods -n "${REVIEW_NS}" \
+          -l "bemade.org/instance=${INSTANCE_NAME},batch.kubernetes.io/job-name" \
+          --sort-by=.metadata.creationTimestamp \
+          -o jsonpath='{.items[*].metadata.name}' 2>/dev/null | tr ' ' '\n' | tail -1)
+        if [ -n "$POD" ]; then
+          kubectl logs -n "${REVIEW_NS}" "$POD" --all-containers --tail=2000 > review-init.log 2>&1 || true
+        else
+          echo "No init job pod found for ${INSTANCE_NAME} (already garbage-collected, TTL is 15m after completion)." > review-init.log
+        fi
+      }
+
+      echo "Waiting for ${INSTANCE_NAME} to become ready (timeout ${TIMEOUT_SECONDS}s)..."
+
+      while true; do
+        if ! kubectl get odooinstance "${INSTANCE_NAME}" -n "${REVIEW_NS}" >/dev/null 2>&1; then
+          echo "${INSTANCE_NAME} no longer exists (MR closed/merged and torn down) — nothing to report."
+          exit 0
+        fi
+
+        PHASE=$(kubectl get odooinstance "${INSTANCE_NAME}" -n "${REVIEW_NS}" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+
+        if [ "$PHASE" = "Running" ]; then
+          echo "${INSTANCE_NAME} is ready."
+          post_comment "## Review Environment Ready
+
+      **${INSTANCE_NAME}** finished initializing after ${ELAPSED}s and is up.
+
+      ${REVIEW_URL}"
+          exit 0
+        fi
+
+        if [ "$PHASE" = "InitFailed" ]; then
+          echo "${INSTANCE_NAME} failed to initialize."
+          dump_init_log
+          post_comment "## Review Environment Failed
+
+      **${INSTANCE_NAME}** failed database initialization after ${ELAPSED}s.
+
+      The init job's log is attached as an artifact on the \`review-wait\` job. Status: \`kubectl get odooinstance ${INSTANCE_NAME} -n ${REVIEW_NS}\`"
+          exit 1
+        fi
+
+        if [ "$ELAPSED" -ge "$TIMEOUT_SECONDS" ]; then
+          echo "Timed out waiting for ${INSTANCE_NAME} (still ${PHASE})."
+          dump_init_log
+          post_comment "## Review Environment Still Not Ready
+
+      **${INSTANCE_NAME}** was still \`${PHASE}\` after ${ELAPSED}s. It may just be slow (large module/demo-data set) rather than broken — check ${REVIEW_URL} or \`kubectl get odooinstance ${INSTANCE_NAME} -n ${REVIEW_NS}\` directly. If this project's installs routinely take longer, raise \`REVIEW_READY_TIMEOUT_SECONDS\`."
+          exit 1
+        fi
+
+        sleep "$POLL_INTERVAL"
+        ELAPSED=$((ELAPSED + POLL_INTERVAL))
+      done
 
 # Review stop - tears down the ephemeral review instance when MR is closed/merged
 review-stop:
