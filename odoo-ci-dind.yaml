@@ -560,11 +560,17 @@ review-wait:
         if [ "$PHASE" = "InitFailed" ]; then
           echo "${INSTANCE_NAME} failed to initialize."
           dump_init_log
+          # The operator never auto-retries a failed init job on respec (no
+          # transition recreates it once InitFailed), so a stale instance
+          # would otherwise sit broken forever, surviving every future push
+          # to this MR. Delete it now so the next review-deploy starts
+          # completely fresh with a real new init attempt.
+          kubectl delete odooinstance "${INSTANCE_NAME}" -n "${REVIEW_NS}" --ignore-not-found --wait=false
           post_comment "## Review Environment Failed
 
-      **${INSTANCE_NAME}** failed database initialization after ${ELAPSED}s.
+      **${INSTANCE_NAME}** failed database initialization after ${ELAPSED}s and has been deleted.
 
-      The init job's log is attached as an artifact on the \`review-wait\` job. Status: \`kubectl get odooinstance ${INSTANCE_NAME} -n ${REVIEW_NS}\`"
+      The init job's log is attached as an artifact on the \`review-wait\` job. Push a new commit to try again."
           exit 1
         fi
 

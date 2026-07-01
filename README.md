@@ -102,7 +102,7 @@ Ephemeral Odoo instances for merge request review, similar to Odoo's runbot.
 **How it works:**
 1. MR is created → build + test run as normal
 2. `review-deploy` creates an OdooInstance with demo data in the `odoo-review` namespace and posts a "provisioning" comment on the MR
-3. `review-wait` polls the instance until it's actually `Running`, then posts a follow-up "Ready" comment — or an "Init Failed" comment (with the init job's log attached as a pipeline artifact) if it doesn't come up within `REVIEW_READY_TIMEOUT_SECONDS`
+3. `review-wait` polls the instance until it's actually `Running`, then posts a follow-up "Ready" comment. If the operator reports `InitFailed`, it posts a "Failed" comment (with the init job's log attached as a pipeline artifact) and **deletes the instance** — the operator never auto-retries a failed init job on its own, so leaving it in place would mean it stays broken forever even after a fix is pushed; deleting it lets the next `review-deploy` start completely fresh. If it's still not `Running` after `REVIEW_READY_TIMEOUT_SECONDS` without an explicit failure, it posts a "still not ready" comment instead (and leaves the instance alone — it may just be slow)
 4. When the MR is merged or closed, GitLab auto-triggers `review-stop` which deletes the instance and cleans up the container image
 
 **Setup:**
