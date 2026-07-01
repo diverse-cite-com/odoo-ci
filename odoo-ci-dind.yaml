@@ -389,6 +389,20 @@ review-deploy:
       REVIEW_URL="https://${REVIEW_HOST}"
       CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
 
+      # Pin by digest, not the mutable :test tag. OdooInstance pods default
+      # to imagePullPolicy: IfNotPresent, so any node that has ever pulled
+      # this tag before will keep serving its old cached image forever, no
+      # matter how many times :test gets re-pushed - real content changes
+      # silently never reach the cluster. build.sh already writes this
+      # digest for the deploy job's same @digest patch; review-deploy just
+      # never consumed it.
+      if [ ! -f image-digest.txt ]; then
+        echo "ERROR: image-digest.txt artifact from build job not found." >&2
+        exit 1
+      fi
+      IMAGE_DIGEST=$(cat image-digest.txt)
+      REVIEW_IMAGE="${CONTAINER_IMAGE}@${IMAGE_DIGEST}"
+
       # Build modules list from project-addons.txt, fall back to "base"
       MODULES_RAW=""
       if [ -f project-addons.txt ]; then
@@ -422,7 +436,7 @@ review-deploy:
           review/mr-iid: "${CI_MERGE_REQUEST_IID}"
           review/project: "${CI_PROJECT_PATH_SLUG}"
       spec:
-        image: "${CONTAINER_IMAGE}:test"
+        image: "${REVIEW_IMAGE}"
         imagePullSecret: "registry.bemade.org"
         adminPassword: "review-admin"
         replicas: 1
