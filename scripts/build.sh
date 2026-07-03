@@ -41,9 +41,18 @@ source "${SCRIPT_DIR}/setup_ssh.sh"
 #
 # Self-healing: the CI cache restores .repos/ + .git/modules/ together, but if
 # that pair is ever inconsistent (e.g. a partial/old cache, or a submodule
-# gitlink whose .git/modules dir is missing) the update aborts with "could not
-# get a repository handle". Rather than fail the build, deinit + purge the
-# submodule state and re-clone clean.
+# gitlink whose .git/modules dir is missing, or a stale cache restored over a
+# fresh checkout after a pointer bump) the update aborts. Rather than fail the
+# build, deinit + purge the submodule state and re-clone clean.
+#
+# Same-host private submodules over https: the runner only injects credentials
+# during GetSources — inside the job, only SSH is configured (setup_ssh.sh).
+# Any in-job clone of a private https submodule (the self-heal path, or a
+# relative URL resolved against a plain-https origin) dies with "could not
+# read Username". Reuse the job token so those clones authenticate.
+if [ -n "${CI_JOB_TOKEN:-}" ] && [ -n "${CI_SERVER_HOST:-}" ]; then
+  git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "https://${CI_SERVER_HOST}/"
+fi
 git submodule sync --recursive || true
 if ! git submodule update --init --recursive --recommend-shallow --jobs 8; then
   echo "submodule update failed (stale/inconsistent cache?) - purging and retrying clean"
