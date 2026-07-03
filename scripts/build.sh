@@ -53,11 +53,23 @@ source "${SCRIPT_DIR}/setup_ssh.sh"
 if [ -n "${CI_JOB_TOKEN:-}" ] && [ -n "${CI_SERVER_HOST:-}" ]; then
   git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "https://${CI_SERVER_HOST}/"
 fi
+# Ephemeral CI clone: a fetch can spawn a detached `git gc --auto` that keeps
+# writing to .git/modules/<sub> while the self-heal purge runs, so rm -rf
+# fails "Directory not empty" and the retry then mistakes the half-deleted
+# module dir for an existing clone ("not a git repository" / "BUG: submodule
+# considered for cloning"). No maintenance needed on a throwaway checkout.
+git config --global gc.auto 0
 git submodule sync --recursive || true
 if ! git submodule update --init --recursive --recommend-shallow --jobs 8; then
   echo "submodule update failed (stale/inconsistent cache?) - purging and retrying clean"
   git submodule deinit -f --all || true
-  rm -rf .git/modules/.repos .repos || true
+  # Belt over the gc.auto suspenders: retry the purge if a straggling git
+  # process (spawned before gc was disabled) still holds the dir open.
+  for _ in 1 2 3 4 5; do
+    rm -rf .git/modules/.repos .repos && break
+    echo "purge incomplete (background git maintenance?) - retrying"
+    sleep 3
+  done
   git submodule update --init --recursive --recommend-shallow --jobs 8
 fi
 
