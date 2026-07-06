@@ -314,6 +314,10 @@ deploy:
     - job: build
     - job: test
       optional: true  # Test job may be skipped if TEST_BRANCHES is not set
+    - job: vendor_check
+      # Only exists on vendored repos (rules:exists addons.lock). optional =>
+      # blocks deploy when it exists and fails; ignored where it doesn't exist.
+      optional: true
   dependencies:
     - build
   rules:
@@ -387,6 +391,8 @@ review-deploy:
       artifacts: true
     - job: test
       optional: true
+    - job: vendor_check
+      optional: true  # gate MR review envs on vendoring integrity too
   rules:
     - if: $REVIEW_ENABLED == "true" && $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
       when: on_success
