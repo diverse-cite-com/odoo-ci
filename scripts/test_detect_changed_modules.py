@@ -194,6 +194,47 @@ class TestExtractModuleFromPath:
         # Should return None because it's not symlinked in addons/
         assert result is None
 
+    def test_vendored_addon_change(self, temp_addons_dir):
+        """Test extracting module from a vendored/ path (real dir, no symlink)."""
+        addons_dir = temp_addons_dir / "addons"
+        vendored_dir = temp_addons_dir / "vendored"
+        module = vendored_dir / "bemade_fsm"
+        module.mkdir(parents=True)
+        (module / "__manifest__.py").write_text('{"name": "FSM"}')
+
+        result = extract_module_from_path(
+            "vendored/bemade_fsm/models/task.py",
+            addons_dir,
+            {},
+            vendored_dir,
+        )
+        assert result == "bemade_fsm"
+
+    def test_vendored_ignored_when_no_vendored_dir(self, temp_addons_dir):
+        """A vendored/ path returns None when no vendored_dir is provided."""
+        addons_dir = temp_addons_dir / "addons"
+        result = extract_module_from_path(
+            "vendored/bemade_fsm/models/task.py",
+            addons_dir,
+            {},
+            None,
+        )
+        assert result is None
+
+    def test_vendored_non_module_dir(self, temp_addons_dir):
+        """A changed file under vendored/ that isn't an Odoo module returns None."""
+        addons_dir = temp_addons_dir / "addons"
+        vendored_dir = temp_addons_dir / "vendored"
+        (vendored_dir / "not_a_module").mkdir(parents=True)  # no manifest
+
+        result = extract_module_from_path(
+            "vendored/not_a_module/README.md",
+            addons_dir,
+            {},
+            vendored_dir,
+        )
+        assert result is None
+
 
 class TestGetChangedFiles:
     @patch("detect_changed_modules.run_git_command")

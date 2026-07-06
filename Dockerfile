@@ -42,4 +42,11 @@ RUN if [ -f /mnt/extra-addons/requirements.txt ]; then \
 
 # Copy addons last (changes on most commits) so the dependency layer above
 # stays cached across code-only changes.
-COPY --chown=odoo:odoo ./addons /mnt/extra-addons
+#
+# Both client-owned addons (./addons) and vendored shared addons (./vendored,
+# materialized real dirs pinned by addons.lock) go into the same
+# /mnt/extra-addons the base image already has on its addons_path. `vendor check`
+# guarantees no name collides between the two. build.sh ensures ./vendored
+# exists (empty is fine) so this COPY never fails on a not-yet-vendored repo.
+COPY --chown=odoo:odoo ./addons   /mnt/extra-addons
+COPY --chown=odoo:odoo ./vendored /mnt/extra-addons

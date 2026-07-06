@@ -939,3 +939,40 @@ version_bump_check:
   script:
     - git fetch --quiet origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
     - bemade-check-version-bump --against "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+
+# Verify the vendored/ shared addons byte-match the commits pinned in addons.lock
+# (per-addon vendoring integrity gate). Backward compatible: the job only exists
+# when the repo has an addons.lock (rules:exists), so non-vendored projects are
+# entirely unaffected. Re-fetches the pinned source repos, so it reuses the same
+# github SSH key + git.bemade.org job-token auth the build uses for submodules.
+vendor_check:
+  stage: test
+  tags: [kubernetes]
+  image: python:3.12-slim
+  interruptible: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - exists:
+        - addons.lock
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git openssh-client >/dev/null
+    - *setup_ssh
+    # Reuse the CI job token for same-host (git.bemade.org) source repos, in both
+    # https and ssh (git@host:) forms — mirrors build.sh's submodule auth so
+    # private source repos on this GitLab are fetchable. github sources use the
+    # SSH key loaded by *setup_ssh.
+    - |
+      if [ -n "${CI_JOB_TOKEN:-}" ] && [ -n "${CI_SERVER_HOST:-}" ]; then
+        git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "https://${CI_SERVER_HOST}/"
+        git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "git@${CI_SERVER_HOST}:"
+      fi
+    - pip install --quiet "odoo-dev @ git+ssh://git@github.com/bemade/odoo-dev@${ODOO_DEV_REF:-master}"
+  script:
+    # Belt-and-suspenders with rules:exists — never fail a non-vendored repo.
+    - |
+      if [ ! -f addons.lock ]; then
+        echo "No addons.lock at repo root — not vendored; skipping vendor check."
+        exit 0
+      fi
+    - odoo-dev vendor check

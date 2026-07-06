@@ -151,6 +151,7 @@ def extract_module_from_path(
     file_path: str,
     addons_dir: Path,
     symlink_map: dict[str, str],
+    vendored_dir: Optional[Path] = None,
 ) -> Optional[str]:
     """
     Extract the Odoo module name from a changed file path.
@@ -159,6 +160,7 @@ def extract_module_from_path(
         file_path: Relative path to changed file
         addons_dir: Path to addons directory
         symlink_map: Mapping from .repos paths to module names
+        vendored_dir: Path to the vendored/ directory (if any)
 
     Returns:
         Module name if the file belongs to an Odoo module, None otherwise.
@@ -176,6 +178,13 @@ def extract_module_from_path(
             module_path = module_path.resolve()
 
         if is_odoo_module(module_path) or is_odoo_module(addons_dir / module_name):
+            return module_name
+
+    # Case 1b: Direct changes in vendored/ directory (real committed dirs, no
+    # symlink indirection). e.g., vendored/my_module/models/model.py -> my_module
+    if vendored_dir is not None and parts[0] == "vendored" and len(parts) >= 2:
+        module_name = parts[1]
+        if is_odoo_module(vendored_dir / module_name):
             return module_name
 
     # Case 2: Changes in .repos/ directory (submodules)
@@ -204,6 +213,7 @@ def detect_changed_modules(
     head_ref: str,
     addons_dir: Path,
     cwd: Optional[Path] = None,
+    vendored_dir: Optional[Path] = None,
 ) -> set[str]:
     """
     Detect which Odoo modules have changed between two git refs.
@@ -213,6 +223,7 @@ def detect_changed_modules(
         head_ref: Head git reference
         addons_dir: Path to the addons directory
         cwd: Working directory for git commands
+        vendored_dir: Path to the vendored/ directory (if any)
 
     Returns:
         Set of module names that have changed.
@@ -226,7 +237,9 @@ def detect_changed_modules(
     changed_modules = set()
 
     for file_path in changed_files:
-        module = extract_module_from_path(file_path, addons_dir, symlink_map)
+        module = extract_module_from_path(
+            file_path, addons_dir, symlink_map, vendored_dir
+        )
         if module:
             changed_modules.add(module)
 
@@ -236,6 +249,7 @@ def detect_changed_modules(
 def get_codependent_modules(
     modules: set[str],
     addons_dir: Path,
+    vendored_dir: Optional[Path] = None,
 ) -> set[str]:
     """
     Find modules that depend on the given modules using manifestoo.
@@ -243,6 +257,7 @@ def get_codependent_modules(
     Args:
         modules: Set of module names to find co-dependents for
         addons_dir: Path to addons directory
+        vendored_dir: Path to the vendored/ directory (if any)
 
     Returns:
         Set of co-dependent module names (modules that depend on input modules).
@@ -260,13 +275,21 @@ def get_codependent_modules(
         )
         return set()
 
+    # Resolve dependencies across both addons/ and vendored/ (comma-separated,
+    # as Odoo/manifestoo expect), so a changed shared addon's dependents are found
+    # whether they live in addons/ or vendored/.
+    search_dirs = [addons_dir]
+    if vendored_dir is not None and vendored_dir.exists():
+        search_dirs.append(vendored_dir)
+    addons_path = ",".join(str(d) for d in search_dirs)
+
     try:
         select_modules = ",".join(modules)
         result = subprocess.run(
             [
                 "manifestoo",
                 "--addons-path",
-                str(addons_dir),
+                addons_path,
                 "--select",
                 select_modules,
                 "list-codepends",
@@ -279,9 +302,14 @@ def get_codependent_modules(
 
         codepends = result.stdout.strip()
         if codepends:
-            # Filter to only modules that exist in our addons directory
+            # Filter to modules that exist in either addons/ or vendored/.
             codep_set = set(codepends.split(","))
-            return {m for m in codep_set if is_odoo_module(addons_dir / m)}
+            return {
+                m
+                for m in codep_set
+                if is_odoo_module(addons_dir / m)
+                or (vendored_dir is not None and is_odoo_module(vendored_dir / m))
+            }
 
     except subprocess.CalledProcessError as e:
         print(f"Warning: manifestoo failed: {e.stderr}", file=sys.stderr)
@@ -312,6 +340,13 @@ def main():
         type=Path,
         default=Path("./addons"),
         help="Path to addons directory (default: ./addons)",
+    )
+    parser.add_argument(
+        "--vendored-dir",
+        type=Path,
+        default=None,
+        help="Path to the vendored/ directory of materialized shared addons "
+        "(default: none). Changes under it map <dir> -> module directly.",
     )
     parser.add_argument(
         "--base-ref",
@@ -359,16 +394,23 @@ def main():
     if not head_ref:
         head_ref = ci_sha if ci_sha else "HEAD"
 
+    # Only consider the vendored dir if it was given and actually exists.
+    vendored_dir = args.vendored_dir
+    if vendored_dir is not None and not vendored_dir.exists():
+        vendored_dir = None
+
     if args.verbose:
         print(f"Base ref: {base_ref}", file=sys.stderr)
         print(f"Head ref: {head_ref}", file=sys.stderr)
         print(f"Addons dir: {args.addons_dir}", file=sys.stderr)
+        print(f"Vendored dir: {vendored_dir}", file=sys.stderr)
 
     # Detect changed modules
     changed_modules = detect_changed_modules(
         base_ref=base_ref,
         head_ref=head_ref,
         addons_dir=args.addons_dir,
+        vendored_dir=vendored_dir,
     )
 
     if args.verbose:
@@ -379,7 +421,9 @@ def main():
 
     # Optionally include co-dependencies
     if args.include_codepends and changed_modules:
-        codepends = get_codependent_modules(changed_modules, args.addons_dir)
+        codepends = get_codependent_modules(
+            changed_modules, args.addons_dir, vendored_dir
+        )
         if codepends:
             if args.verbose:
                 print(f"Co-dependent modules: {sorted(codepends)}", file=sys.stderr)

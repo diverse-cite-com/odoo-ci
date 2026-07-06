@@ -131,6 +131,12 @@ BUILD_DATE=$(date +%Y-%m-%d)
 # Ensure optional files exist (empty is fine, Dockerfile handles it)
 touch requirements.txt build-packages.txt runtime-packages.txt
 
+# Ensure ./vendored exists so the Dockerfile's `COPY ./vendored` never fails on a
+# repo that hasn't been migrated to vendoring yet (empty dir is fine). Vendored
+# addons are already real dirs, so — unlike ./addons — they need no symlink
+# materialization above.
+mkdir -p vendored
+
 # Setup buildx against the persistent in-cluster BuildKit daemon (remote
 # driver) instead of a throwaway dind buildkit. This keeps a warm layer cache
 # (base image, apt, pip) on the buildkitd PVC across builds, so the base image
@@ -253,6 +259,7 @@ if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ] || [ -n "$TEST_BRANCHES" ] 
 
     python3 "${SCRIPT_DIR}/detect_changed_modules.py" \
       --addons-dir ./addons \
+      --vendored-dir ./vendored \
       --base-ref "${CI_COMMIT_BEFORE_SHA:-HEAD~1}" \
       --head-ref "${CI_COMMIT_SHA:-HEAD}" \
       --output comma \
