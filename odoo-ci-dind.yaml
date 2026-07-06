@@ -129,10 +129,27 @@ build:
         fi
         # build.sh inits submodules with --recommend-shallow; deepen each so
         # off-default-branch pointer SHAs from base resolve when diffing.
-        git submodule foreach --recursive 'git fetch --unshallow --no-tags origin "+refs/heads/*:refs/remotes/origin/*" 2>/dev/null || git fetch --no-tags origin "+refs/heads/*:refs/remotes/origin/*" || true'
+        # NB: fetch failures here used to be swallowed by a trailing `|| true`
+        # with no log line - a silently-incomplete deepen is indistinguishable
+        # from "no submodule changes" in the job log. Log every outcome instead
+        # (2026-07-05 fitcrew-staging incident: modules:[] on a real submodule
+        # bump, root cause never pinned down because nothing logged the fetch
+        # step).
+        git submodule foreach --recursive '
+          echo "[staging-diff] deepening $name ...";
+          if git fetch --unshallow --no-tags origin "+refs/heads/*:refs/remotes/origin/*" 2>&1; then
+            echo "[staging-diff] $name: unshallow fetch OK";
+          elif git fetch --no-tags origin "+refs/heads/*:refs/remotes/origin/*" 2>&1; then
+            echo "[staging-diff] $name: already full history, plain fetch OK";
+          else
+            echo "[staging-diff] WARNING: $name: both deepen fetches FAILED - submodule diff for this submodule may be incomplete";
+          fi
+        '
+        echo "[staging-diff] DIFF_BASE_REF=${DIFF_BASE_REF} DIFF_BASE_BRANCH=${DIFF_BASE_BRANCH} head=${CI_COMMIT_SHA}"
         python3 ci-scripts/staging_diff.py \
           --base "${DIFF_BASE_REF}" \
           --head "${CI_COMMIT_SHA}" \
+          --verbose \
           -o staging-refresh.json
         cat staging-refresh.json
       else

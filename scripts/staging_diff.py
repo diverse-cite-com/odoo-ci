@@ -147,7 +147,7 @@ def addons_symlink_map(addons_dir: Path) -> dict[Path, str]:
     return mapping
 
 
-def ensure_commit(sha: str, sub_root: Path) -> bool:
+def ensure_commit(sha: str, sub_root: Path, verbose: bool = False) -> bool:
     """Ensure `sha` is present in the submodule clone, fetching it if missing.
 
     CI clones submodules shallow (``--recommend-shallow``), so a base pin that
@@ -161,15 +161,24 @@ def ensure_commit(sha: str, sub_root: Path) -> bool:
         return rc == 0
 
     if present():
+        if verbose:
+            print(f"[staging-diff] {sub_root.name}: {sha} already present locally", file=sys.stderr)
         return True
     for fetch_args in (
         ["git", "fetch", "--no-tags", "origin", sha],
         ["git", "fetch", "--no-tags", "--unshallow", "origin"],
         ["git", "fetch", "--no-tags", "origin", "+refs/heads/*:refs/remotes/origin/*"],
     ):
-        run(fetch_args, sub_root, check=False)
+        rc, _, err = run(fetch_args, sub_root, check=False)
+        if verbose:
+            outcome = "ok" if rc == 0 else f"failed (rc={rc}): {err.strip()[:200]}"
+            print(f"[staging-diff] {sub_root.name}: fetch attempt {' '.join(fetch_args)} -> {outcome}", file=sys.stderr)
         if present():
+            if verbose:
+                print(f"[staging-diff] {sub_root.name}: {sha} resolved after fetch", file=sys.stderr)
             return True
+    if verbose:
+        print(f"[staging-diff] {sub_root.name}: {sha} UNRESOLVED after all fetch attempts", file=sys.stderr)
     return False
 
 
@@ -179,6 +188,7 @@ def modules_from_submodule_diff(
     old_sha: str,
     new_sha: str,
     sym_map: dict[Path, str],
+    verbose: bool = False,
 ) -> set[str]:
     sub_root = repo / sub_path
     if not sub_root.is_dir():
@@ -188,7 +198,7 @@ def modules_from_submodule_diff(
     # while the pipeline stays green — the exact failure that shipped un-migrated
     # modules to prod. Fail loud instead.
     for sha in (old_sha, new_sha):
-        if not ensure_commit(sha, sub_root):
+        if not ensure_commit(sha, sub_root, verbose=verbose):
             raise SystemExit(
                 f"error: submodule {sub_path}: commit {sha} is not available "
                 f"locally and could not be fetched. Refusing to emit a partial "
@@ -232,6 +242,12 @@ def main() -> int:
     ap.add_argument(
         "--output", "-o", help="Write JSON to this file (default: stdout)"
     )
+    ap.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print resolved refs, submodule pointer changes, and the "
+        "per-submodule module list to stderr (self-diagnosing CI logs).",
+    )
     args = ap.parse_args()
 
     repo = Path(args.repo).resolve()
@@ -240,12 +256,24 @@ def main() -> int:
     head = args.head or current_branch(repo)
     base = args.base or derive_base(head)
 
+    if args.verbose:
+        print(f"[staging-diff] repo={repo} base={base} head={head}", file=sys.stderr)
+
     sym_map = addons_symlink_map(addons_dir)
     modules: set[str] = set()
 
     sub_changes = submodule_sha_changes(base, head, repo)
+    if args.verbose:
+        if sub_changes:
+            for sub_path, (old, new) in sub_changes.items():
+                print(f"[staging-diff] submodule pointer changed: {sub_path}: {old} -> {new}", file=sys.stderr)
+        else:
+            print("[staging-diff] no submodule pointer changes detected", file=sys.stderr)
     for sub_path, (old, new) in sub_changes.items():
-        modules |= modules_from_submodule_diff(repo, sub_path, old, new, sym_map)
+        found = modules_from_submodule_diff(repo, sub_path, old, new, sym_map, verbose=args.verbose)
+        if args.verbose:
+            print(f"[staging-diff] {sub_path}: modules from submodule diff: {sorted(found) or '(none)'}", file=sys.stderr)
+        modules |= found
 
     submodule_paths = set(sub_changes.keys())
     for path in changed_paths(base, head, repo):
@@ -260,7 +288,17 @@ def main() -> int:
     available = (
         {p.name for p in addons_dir.iterdir()} if addons_dir.is_dir() else set()
     )
+    if args.verbose:
+        dropped = modules - available
+        if dropped:
+            print(
+                f"[staging-diff] WARNING: modules found in diff but not under "
+                f"addons/, dropped: {sorted(dropped)}",
+                file=sys.stderr,
+            )
     modules = {m for m in modules if m in available}
+    if args.verbose:
+        print(f"[staging-diff] final module list: {sorted(modules) or '(empty)'}", file=sys.stderr)
 
     payload = {"base": base, "head": head, "modules": sorted(modules)}
     text = json.dumps(payload, indent=2) + "\n"
