@@ -989,3 +989,62 @@ vendor_check:
         exit 0
       fi
     - odoo-dev vendor check
+
+# Pull-side propagation for per-addon vendoring (task #3992): on a SCHEDULE, pull
+# the newest upstream pins (`odoo-dev vendor update`) and, if anything moved, open a
+# vendor-bump MR. The client owns its pins — there is NO push/fan-out from the source
+# repos. Opt-in: add a pipeline schedule on the mainline branch. Needs CI_BOT_TOKEN
+# (write_repository + api) to push the branch + open the MR.
+vendor_update:
+  stage: test
+  tags: [kubernetes]
+  image: python:3.12-slim
+  interruptible: true
+  rules:
+    # Schedule-only AND vendored (if + exists are ANDed within a rule); else never.
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      exists:
+        - addons.lock
+    - when: never
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git openssh-client curl >/dev/null
+    - *setup_ssh
+    # Same source-repo auth as vendor_check: CI_JOB_TOKEN for git.bemade.org sources
+    # (https + git@host: forms), github sources via the SSH key from *setup_ssh.
+    - |
+      if [ -n "${CI_JOB_TOKEN:-}" ] && [ -n "${CI_SERVER_HOST:-}" ]; then
+        git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "https://${CI_SERVER_HOST}/"
+        git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "git@${CI_SERVER_HOST}:"
+      fi
+    - git clone --depth 1 -b "${ODOO_DEV_REF:-master}" git@github.com:bemade/odoo-dev.git /tmp/odoo-dev
+    - pip install --quiet /tmp/odoo-dev
+  script:
+    - |
+      if [ ! -f addons.lock ]; then
+        echo "No addons.lock — not vendored; skipping vendor update."; exit 0
+      fi
+    - odoo-dev vendor update
+    - |
+      if git diff --quiet -- addons.lock vendored/ 2>/dev/null; then
+        echo "vendored addons already up to date; nothing to propagate."; exit 0
+      fi
+    - |
+      if [ -z "${CI_BOT_TOKEN:-}" ]; then
+        echo "CI_BOT_TOKEN not set — cannot open a vendor-bump MR."; exit 1
+      fi
+      BR="vendor-update/${CI_PIPELINE_ID}"
+      git config user.email "bot@bemade.org"
+      git config user.name "vendor-update"
+      git checkout -b "$BR"
+      git add addons.lock vendored/
+      git commit -m "chore(vendor): pull upstream addon updates"
+      git push "https://oauth2:${CI_BOT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "HEAD:$BR"
+      curl --fail --silent --show-error -X POST \
+        --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests" \
+        --data-urlencode "source_branch=$BR" \
+        --data-urlencode "target_branch=${CI_COMMIT_BRANCH}" \
+        --data-urlencode "title=vendor: pull upstream addon updates" \
+        --data-urlencode "description=Automated \`odoo-dev vendor update\` — re-pins vendored addons to their newest upstream. Review the addons.lock + vendored/ diff." \
+        --data-urlencode "remove_source_branch=true"
+      echo "opened vendor-bump MR: $BR -> ${CI_COMMIT_BRANCH}"
