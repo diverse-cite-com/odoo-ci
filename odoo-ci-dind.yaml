@@ -993,16 +993,18 @@ vendor_check:
 # Pull-side propagation for per-addon vendoring (task #3992): on a SCHEDULE, pull
 # the newest upstream pins (`odoo-dev vendor update`) and, if anything moved, open a
 # vendor-bump MR. The client owns its pins — there is NO push/fan-out from the source
-# repos. Opt-in: add a pipeline schedule on the mainline branch. Needs CI_BOT_TOKEN
-# (write_repository + api) to push the branch + open the MR.
+# repos. OPT-IN (like release_train): create a pipeline schedule on the mainline
+# branch with variable VENDOR_UPDATE_SCHEDULE=1, and set CI_BOT_TOKEN
+# (write_repository + api). It never runs on other schedules.
 vendor_update:
   stage: test
   tags: [kubernetes]
   image: python:3.12-slim
   interruptible: true
   rules:
-    # Schedule-only AND vendored (if + exists are ANDed within a rule); else never.
-    - if: $CI_PIPELINE_SOURCE == "schedule"
+    # Opt-in schedule (VENDOR_UPDATE_SCHEDULE=1) AND vendored; else never. Keeping
+    # it opt-in means an unrelated schedule on a vendored repo never triggers it.
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $VENDOR_UPDATE_SCHEDULE == "1"
       exists:
         - addons.lock
     - when: never
