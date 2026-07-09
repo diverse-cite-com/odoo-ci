@@ -103,7 +103,9 @@ build:
     # Copy CI scripts for use in test stage
     - mkdir -p ci-scripts && cp /tmp/odoo-ci/scripts/odoo_log_to_junit.py /tmp/odoo-ci/scripts/filter_no_ci.py /tmp/odoo-ci/scripts/staging_diff.py ci-scripts/
     # List all project addons (directories with __manifest__.py) for review instances
-    - ls -d addons/*/__manifest__.py 2>/dev/null | sed 's|addons/||;s|/__manifest__.py||' | tr '\n' ',' | sed 's/,$//' > project-addons.txt
+    # `|| true`: the runner has pipefail on, so a no-match `ls` (repo with zero
+    # addons, e.g. odoo-empty) would otherwise fail the job — an empty list is fine.
+    - ls -d addons/*/__manifest__.py 2>/dev/null | sed 's|addons/||;s|/__manifest__.py||' | tr '\n' ',' | sed 's/,$//' > project-addons.txt || true
     # Compute install/upgrade module list for downstream deploy/preview jobs.
     # For MRs: base = MR target branch (preview instance applies MR changes on top).
     # For *-staging pushes: base = branch minus "-staging".
