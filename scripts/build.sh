@@ -156,22 +156,30 @@ else
 fi
 
 # Registry-backed layer cache. Unchanged base/apt/pip/COPY layers are imported
-# from a per-target cache ref in THIS image's own repo instead of being rebuilt
-# — this is what replaces the retired persistent buildkitd's warm PVC cache.
-# Per-target refs (production and test build on DIFFERENT base images, so a
-# shared ref would thrash). mode=max also caches intermediate layers. The first
-# build is a cache miss (ref absent) and proceeds normally, seeding the cache.
+# from a per-target cache ref instead of being rebuilt — this replaces the
+# retired persistent buildkitd's warm PVC cache.
 #
-# All cache refs live in ${CONTAINER_IMAGE}'s own repo, so this job's deploy
-# token covers pull+push and no cross-repo (foreign-scope) token is ever
-# requested — which is exactly why the direct `--push` below is safe again now
-# that the builder is a fresh per-job dind with no other projects' layers in its
-# store (the reason the old shared-buildkitd path had to detour via skopeo).
+# The ref is PROJECT-scoped (CI_REGISTRY_IMAGE carries no branch), NOT
+# branch-scoped like CONTAINER_IMAGE, so every branch shares one cache: a new
+# feat/* branch's first build imports the (stable, expensive) base/apt/pip
+# layers a prior build wrote instead of cold-starting on a non-existent
+# per-branch ref; only its own addon delta rebuilds. Last-writer-wins across
+# concurrent branch builds is fine — cache manifests are written whole and blobs
+# dedupe by digest. Per-target because prod and test build on different base
+# images; mode=max caches intermediate layers too. Only the very first build of
+# a project (before the refs exist) is a full cache miss.
+#
+# The ref stays within this project's own registry namespace, so the job's
+# deploy token covers pull+push and no cross-repo (foreign-scope) token is ever
+# requested — the same single-repo-scope property that makes the direct `--push`
+# below safe on a fresh per-job dind (the old shared buildkitd had to detour via
+# skopeo because its store held other projects' foreign-labeled layers).
+CACHE_REF="${CI_REGISTRY_IMAGE}/odoo-buildcache"
 CACHE_FLAGS=(
-  --set "production.cache-from=type=registry,ref=${CONTAINER_IMAGE}:buildcache-prod"
-  --set "production.cache-to=type=registry,ref=${CONTAINER_IMAGE}:buildcache-prod,mode=max"
-  --set "test.cache-from=type=registry,ref=${CONTAINER_IMAGE}:buildcache-test"
-  --set "test.cache-to=type=registry,ref=${CONTAINER_IMAGE}:buildcache-test,mode=max"
+  --set "production.cache-from=type=registry,ref=${CACHE_REF}:prod"
+  --set "production.cache-to=type=registry,ref=${CACHE_REF}:prod,mode=max"
+  --set "test.cache-from=type=registry,ref=${CACHE_REF}:test"
+  --set "test.cache-to=type=registry,ref=${CACHE_REF}:test,mode=max"
 )
 
 ODOO_VERSION=${ODOO_VERSION} \

@@ -187,11 +187,13 @@ The build stage uses **Docker BuildKit** (`buildx bake`) on a **job-local
 builds coming from a **registry-backed cache** rather than a persistent daemon:
 
 - **Parallel builds**: production and test images build simultaneously
-- **Registry layer cache**: each target imports/exports a per-target cache ref
-  (`<image>:buildcache-prod` / `:buildcache-test`, `mode=max`) in the image's
-  own repo, so unchanged base/apt/pip/COPY layers are reused without a
-  persistent local cache. Per-target because prod and test build on different
-  base images. First build is a cache miss and seeds the ref.
+- **Registry layer cache**: each target imports/exports a project-scoped cache
+  ref (`<project>/odoo-buildcache:prod` / `:test`, `mode=max`), so unchanged
+  base/apt/pip/COPY layers are reused without a persistent local cache. The ref
+  is shared across **all branches** (keyed on the project, not the branch), so a
+  new feature-branch/MR build reuses the base/apt/pip layers a prior build wrote
+  instead of cold-starting — only the very first build of a project is a full
+  miss. Per-target because prod and test build on different base images.
 - **No shared build daemon**: the builder is disposable per job, so there is no
   singleton to wedge (the old persistent in-cluster `buildkitd` was retired
   after recurring lockfile/netns/boot-reconcile outages). Each job's own deploy
