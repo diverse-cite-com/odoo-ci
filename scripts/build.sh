@@ -18,11 +18,12 @@ if [ -z "$CI_REGISTRY" ] || [ -z "$CI_DEPLOY_USER" ] || [ -z "$CI_DEPLOY_PASSWOR
   exit 1
 fi
 
-# Builds run against the persistent in-cluster BuildKit (remote buildx
-# driver), so there is no local Docker daemon to probe. `docker login` below
-# only writes ~/.docker/config.json, which buildx forwards to the remote
-# buildkitd as THIS job's registry credentials (to pull the base image and
-# push the result). buildkitd holds no static credentials of its own.
+# Check the dind daemon is up or fail fast.
+docker image ls
+
+# Login to the registry: writes ~/.docker/config.json, which buildx/dind uses
+# per-build as THIS job's registry credentials (pull the base image, push the
+# result). The builder holds no static credentials of its own.
 echo "${CI_DEPLOY_PASSWORD}" | docker login ${CI_REGISTRY} -u "${CI_DEPLOY_USER}" --password-stdin
 
 # Set up SSH
@@ -137,17 +138,12 @@ touch requirements.txt build-packages.txt runtime-packages.txt
 # materialization above.
 mkdir -p vendored
 
-# Setup buildx against the persistent in-cluster BuildKit daemon (remote
-# driver) instead of a throwaway dind buildkit. This keeps a warm layer cache
-# (base image, apt, pip) on the buildkitd PVC across builds, so the base image
-# isn't re-pulled and unchanged layers are reused. BUILDKIT_HOST defaults to
-# the in-cluster service and is overridable (e.g. for local testing).
-BUILDKIT_HOST="${BUILDKIT_HOST:-tcp://buildkitd.gitlab-runner.svc.cluster.local:1234}"
-docker buildx create --name remote-builder --driver remote --use "${BUILDKIT_HOST}" 2>/dev/null \
-  || docker buildx use remote-builder
-# Fail fast if buildkitd is unreachable (replaces the old `docker image ls`
-# daemon check, which is meaningless now there is no local daemon).
-docker buildx inspect --bootstrap
+# Set up a job-local buildx builder inside dind. `docker buildx create` (no
+# --driver) uses the docker-container driver, which — unlike the built-in
+# `docker` driver — supports registry cache export (--cache-to below). The
+# builder is disposable per job; cross-build layer reuse comes from the
+# registry-backed cache, not a persistent daemon.
+docker buildx create --use --name builder 2>/dev/null || docker buildx use builder
 
 # Determine which target group to build
 if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
@@ -159,43 +155,24 @@ else
   BAKE_TARGET="default"
 fi
 
-# Build each target to a LOCAL OCI archive instead of pushing directly.
+# Registry-backed layer cache. Unchanged base/apt/pip/COPY layers are imported
+# from a per-target cache ref in THIS image's own repo instead of being rebuilt
+# — this is what replaces the retired persistent buildkitd's warm PVC cache.
+# Per-target refs (production and test build on DIFFERENT base images, so a
+# shared ref would thrash). mode=max also caches intermediate layers. The first
+# build is a cache miss (ref absent) and proceeds normally, seeding the cache.
 #
-# Why not `--push`: pushing straight from buildx makes BuildKit try to
-# cross-repository-mount layers it already knows live in OTHER projects' repos
-# (the shared persistent buildkitd content store accumulates identical base/
-# apt/pip layers from every Odoo project, tagged with their
-# containerd.io/distribution.source.<repo> labels). The mount needs *pull*
-# scope on those source repos, so buildx requests a single registry token
-# spanning this repo (pull,push) PLUS every source repo (pull). The source
-# repos are private and this project's deploy token can't read them, and this
-# GitLab rejects the whole combined token request with `insufficient_scope`
-# rather than granting a partial token -> the push dies.
-#
-# A local OCI archive carries no foreign distribution-source labels, so the
-# subsequent `skopeo copy` simply uploads our blobs to our repo using only this
-# project's deploy token (write_registry). The build itself is unchanged, so we
-# keep the warm buildkitd cache (the actual time-saver); only the push hop
-# differs. Identical blobs are deduped server-side by digest, so re-uploading
-# costs bandwidth, not storage.
-# Force a single tag per OCI archive: the production target normally carries
-# two tags (:BUILD_DATE and :latest), and a multi-tag OCI export yields a layout
-# that `skopeo copy` rejects as ambiguous. The in-archive tag is irrelevant -
-# skopeo pushes to whatever dest we name below - so collapse production to one.
-case "$BAKE_TARGET" in
-  test-only)
-    BAKE_OUTPUTS=( --set "test.output=type=oci,dest=test-image.tar" )
-    ;;
-  default)
-    BAKE_OUTPUTS=( --set "production.output=type=oci,dest=prod-image.tar" \
-                   --set "production.tags=${CONTAINER_IMAGE}:latest" )
-    ;;
-  with-test)
-    BAKE_OUTPUTS=( --set "production.output=type=oci,dest=prod-image.tar" \
-                   --set "production.tags=${CONTAINER_IMAGE}:latest" \
-                   --set "test.output=type=oci,dest=test-image.tar" )
-    ;;
-esac
+# All cache refs live in ${CONTAINER_IMAGE}'s own repo, so this job's deploy
+# token covers pull+push and no cross-repo (foreign-scope) token is ever
+# requested — which is exactly why the direct `--push` below is safe again now
+# that the builder is a fresh per-job dind with no other projects' layers in its
+# store (the reason the old shared-buildkitd path had to detour via skopeo).
+CACHE_FLAGS=(
+  --set "production.cache-from=type=registry,ref=${CONTAINER_IMAGE}:buildcache-prod"
+  --set "production.cache-to=type=registry,ref=${CONTAINER_IMAGE}:buildcache-prod,mode=max"
+  --set "test.cache-from=type=registry,ref=${CONTAINER_IMAGE}:buildcache-test"
+  --set "test.cache-to=type=registry,ref=${CONTAINER_IMAGE}:buildcache-test,mode=max"
+)
 
 ODOO_VERSION=${ODOO_VERSION} \
 REGISTRY=${CI_REGISTRY} \
@@ -203,11 +180,11 @@ CONTAINER_IMAGE=${CONTAINER_IMAGE} \
 BUILD_DATE=${BUILD_DATE} \
 COMMUNITY=${COMMUNITY:-} \
 BUILDX_BAKE_ENTITLEMENTS_FS=0 \
-docker buildx bake \
+docker buildx bake --push \
   --set "*.platform=linux/amd64" \
   --set "*.dockerfile=${dockerfile}" \
   --set "*.pull=true" \
-  "${BAKE_OUTPUTS[@]}" \
+  "${CACHE_FLAGS[@]}" \
   --provenance=false \
   --sbom=false \
   -f "${ODOO_CI_DIR}/docker-bake.hcl" \
@@ -219,31 +196,15 @@ docker buildx bake \
 # This is only a cheap manifest check: if the digest is unchanged the cached
 # layers are reused (no re-download); if it moved, only the delta is pulled.
 
-# Push the built archive(s) with skopeo, using this project's deploy token.
-# skopeo lives in the alpine `community` repo; pin the fallback to the running
-# release branch so it matches the `docker` job image's alpine version.
-if ! apk add --no-cache skopeo; then
-  ALPINE_BRANCH="v$(cut -d. -f1,2 /etc/alpine-release)"
-  echo "https://dl-cdn.alpinelinux.org/alpine/${ALPINE_BRANCH}/community" >> /etc/apk/repositories
-  apk add --no-cache skopeo
-fi
-
-DEST_CREDS="${CI_DEPLOY_USER}:${CI_DEPLOY_PASSWORD}"
-if [ -f test-image.tar ]; then
-  skopeo copy --dest-creds "$DEST_CREDS" oci-archive:test-image.tar "docker://${CONTAINER_IMAGE}:test"
-fi
-if [ -f prod-image.tar ]; then
-  skopeo copy --dest-creds "$DEST_CREDS" oci-archive:prod-image.tar "docker://${CONTAINER_IMAGE}:${BUILD_DATE}"
-  skopeo copy --dest-creds "$DEST_CREDS" oci-archive:prod-image.tar "docker://${CONTAINER_IMAGE}:latest"
-fi
-
-# Record the pushed manifest digest for the downstream deploy job.
+# Record the pushed manifest digest for the downstream deploy job. `bake --push`
+# above already uploaded every tag defined in docker-bake.hcl (production:
+# :BUILD_DATE + :latest, test: :test) straight to ${CONTAINER_IMAGE}'s repo.
 if [ "$CI_PIPELINE_SOURCE" = "merge_request_event" ]; then
   DIGEST_TAG="test"
 else
   DIGEST_TAG="latest"
 fi
-skopeo inspect --creds "$DEST_CREDS" --format '{{.Digest}}' "docker://${CONTAINER_IMAGE}:${DIGEST_TAG}" > image-digest.txt
+docker buildx imagetools inspect "${CONTAINER_IMAGE}:${DIGEST_TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"' > image-digest.txt
 
 # Detect changed modules if testing is enabled. The alpine `docker` job image
 # has no python3, so guard on its presence: without it we just emit an empty

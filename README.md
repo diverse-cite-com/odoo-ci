@@ -182,17 +182,20 @@ your-project/
 
 ## Build Performance
 
-The build stage uses **Docker BuildKit** (`buildx bake`) against a **persistent
-in-cluster BuildKit daemon** (the remote buildx driver), not a throwaway
-`docker:dind`:
+The build stage uses **Docker BuildKit** (`buildx bake`) on a **job-local
+`docker:dind`** builder (docker-container driver), with layer reuse across
+builds coming from a **registry-backed cache** rather than a persistent daemon:
 
 - **Parallel builds**: production and test images build simultaneously
-- **Warm layer cache**: `buildkitd` keeps base-image, apt and pip layers on a
-  PVC across builds, so the base image isn't re-pulled and unchanged layers are
-  reused. Cache size is bounded by BuildKit GC (LRU). See
-  [`kube-gitops/buildkit/`](https://git.bemade.org/bemade/kube-gitops).
-- **No privileged dind sidecar**: each build job's own registry credentials are
-  forwarded to the shared `buildkitd` per-build, so it holds no static creds.
+- **Registry layer cache**: each target imports/exports a per-target cache ref
+  (`<image>:buildcache-prod` / `:buildcache-test`, `mode=max`) in the image's
+  own repo, so unchanged base/apt/pip/COPY layers are reused without a
+  persistent local cache. Per-target because prod and test build on different
+  base images. First build is a cache miss and seeds the ref.
+- **No shared build daemon**: the builder is disposable per job, so there is no
+  singleton to wedge (the old persistent in-cluster `buildkitd` was retired
+  after recurring lockfile/netns/boot-reconcile outages). Each job's own deploy
+  token covers pull/push of both the image and its cache refs.
 - **Parallel submodule clone**: `--jobs 8` so the project's submodules fetch
   concurrently instead of serially.
 

@@ -65,19 +65,27 @@ build:
     - if: $ALLOWED_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $ALLOWED_BRANCHES
       when: always
     - when: never
-  # No docker:dind service: builds run against the persistent in-cluster
-  # BuildKit daemon via the remote buildx driver (see scripts/build.sh and
-  # kube-gitops/buildkit/). This drops a privileged sidecar and its per-job
-  # startup, and keeps a warm layer cache across builds.
+  # Job-local docker:dind builds (no shared persistent buildkitd). buildx runs
+  # a disposable docker-container builder inside dind; cross-build layer reuse
+  # comes from the registry-backed cache (scripts/build.sh --cache-from/-to).
+  # This removes the shared-singleton failure class (lockfile/netns/boot-hang)
+  # at the cost of pulling cache refs from the registry per job.
+  services:
+    - name: docker:dind
+      alias: docker
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
   variables:
-    # NB: no DOCKER_AUTH_CONFIG. Registry auth for pull/push is handled by the
-    # `docker login` in build.sh (forwarded to remote buildkitd per-build), and
-    # the runner ServiceAccount's imagePullSecrets cover job/base image pulls.
-    # The old malformed value ({"username":...,"password":...} instead of a
-    # base64 "auth") only produced a recurring credential-store warning.
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+    DOCKER_BUILDKIT: "1"
+    # NB: no DOCKER_AUTH_CONFIG. Registry auth for pull (base image) and push is
+    # handled by the `docker login` in build.sh (writes ~/.docker/config.json,
+    # which buildx/dind uses per-build), and the runner ServiceAccount's
+    # imagePullSecrets cover the job/dind image pulls. The old malformed value
+    # ({"username":...,"password":...} instead of a base64 "auth") only produced
+    # a recurring credential-store warning.
     #
-    # Endpoint of the shared in-cluster BuildKit daemon (overridable per project).
-    BUILDKIT_HOST: tcp://buildkitd.gitlab-runner.svc.cluster.local:1234
     # Full history so staging_diff.py can compute base...head and follow
     # submodule pointer bumps without "unknown revision" errors.
     GIT_DEPTH: "0"
