@@ -285,15 +285,30 @@ def main() -> int:
         if modname:
             modules.add(modname)
 
-    available = (
+    # Modules exposed to Odoo live either under addons/ (client modules and
+    # addons/<name> symlinks into .repos/ submodules) OR directly under
+    # vendored/ (vendored deps on the addons path via the vendored/ dir, with
+    # no addons/ symlink). Both are installable; a diff that touches only a
+    # vendored module (e.g. sap_b1_to_odoo) must still make the upgrade list,
+    # otherwise a new base model it introduces is never reflected and any
+    # upgraded dependent crashes on ir_model_inherit (NOT NULL parent_id).
+    available: set[str] = (
         {p.name for p in addons_dir.iterdir()} if addons_dir.is_dir() else set()
     )
+    vendored_dir = repo / "vendored"
+    if vendored_dir.is_dir():
+        available |= {
+            p.name
+            for p in vendored_dir.iterdir()
+            if p.is_dir()
+            and ((p / "__manifest__.py").exists() or (p / "__openerp__.py").exists())
+        }
     if args.verbose:
         dropped = modules - available
         if dropped:
             print(
                 f"[staging-diff] WARNING: modules found in diff but not under "
-                f"addons/, dropped: {sorted(dropped)}",
+                f"addons/ or vendored/, dropped: {sorted(dropped)}",
                 file=sys.stderr,
             )
     modules = {m for m in modules if m in available}
