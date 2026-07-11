@@ -35,7 +35,8 @@ import json
 import re
 import subprocess
 import sys
-from pathlib import Path
+import os
+from pathlib import Path, PurePosixPath
 
 
 def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> tuple[int, str, str]:
@@ -147,6 +148,48 @@ def addons_symlink_map(addons_dir: Path) -> dict[Path, str]:
     return mapping
 
 
+def addons_link_map(repo: Path, head: str) -> dict[str, str]:
+    """Map repo-relative addons/ link TARGETS -> module name, from the git tree.
+
+    Filesystem-independent twin of ``addons_symlink_map``: reads the
+    ``addons/`` entries of the *head commit's tree* (``git ls-tree``) instead
+    of the checkout. Symlink targets come from the link blobs and are
+    normalized repo-relative (``addons/../.repos/x/mod`` -> ``.repos/x/mod``);
+    real module dirs map to their own ``addons/<name>`` path.
+
+    Motivation (2026-07-11 fitcrew prod incident, second occurrence of the
+    2026-07-05 one): in CI the filesystem-based map failed to match a bumped
+    submodule's modules for reasons not reproducible outside the runner, and
+    the upgrade list silently shipped without ``bemade_sports_clinic`` —
+    1.3.1 code over a 1.2.0 schema on prod. String-matching against the git
+    tree removes every environmental dependency from the mapping.
+    """
+    rc, out, _err = run(
+        ["git", "ls-tree", "-r", "-z", head, "--", "addons"], repo, check=False
+    )
+    if rc != 0:
+        return {}
+    mapping: dict[str, str] = {}
+    for entry in out.split("\0"):
+        if not entry or "\t" not in entry:
+            continue
+        meta, _tab, path = entry.partition("\t")
+        parts = meta.split()
+        if len(parts) < 3:
+            continue
+        mode, _otype, sha = parts[0], parts[1], parts[2]
+        ppath = PurePosixPath(path)
+        if mode == "120000" and len(ppath.parts) == 2:
+            _rc2, target, _e2 = run(["git", "cat-file", "blob", sha], repo)
+            norm = os.path.normpath(
+                str(PurePosixPath("addons") / target.strip())
+            ).replace(os.sep, "/")
+            mapping[norm] = ppath.parts[1]
+        elif ppath.name in ("__manifest__.py", "__openerp__.py") and len(ppath.parts) == 3:
+            mapping[f"addons/{ppath.parts[1]}"] = ppath.parts[1]
+    return mapping
+
+
 def ensure_commit(sha: str, sub_root: Path, verbose: bool = False) -> bool:
     """Ensure `sha` is present in the submodule clone, fetching it if missing.
 
@@ -189,6 +232,7 @@ def modules_from_submodule_diff(
     new_sha: str,
     sym_map: dict[Path, str],
     verbose: bool = False,
+    link_map: dict[str, str] | None = None,
 ) -> set[str]:
     sub_root = repo / sub_path
     if not sub_root.is_dir():
@@ -215,18 +259,59 @@ def modules_from_submodule_diff(
             f"error: submodule {sub_path}: `git diff {old_sha}..{new_sha}` failed: "
             f"{err.strip()}"
         )
+    link_map = link_map or {}
+    known_names = set(sym_map.values()) | set(link_map.values())
     found: set[str] = set()
+    unmatched_known: set[str] = set()
     for line in out.splitlines():
         if not line:
             continue
+        # Primary, filesystem-free mapping: the module is the changed path's
+        # top-level dir; match it against the addons/ link targets recorded
+        # in the git tree (see addons_link_map).
+        top = line.split("/", 1)[0]
+        name = link_map.get(f"{sub_path}/{top}")
+        if name:
+            found.add(name)
+            continue
+        # Legacy fallback: resolve through the checkout filesystem (covers
+        # exotic layouts, e.g. modules nested below the submodule root).
+        matched_fs = False
         cur = (sub_root / line).parent
         while cur != sub_root.parent and cur != Path(cur.anchor):
             if (cur / "__manifest__.py").exists() or (cur / "__openerp__.py").exists():
                 key = cur.resolve()
                 if key in sym_map:
                     found.add(sym_map[key])
+                    matched_fs = True
                 break
             cur = cur.parent
+        if not matched_fs and top in known_names:
+            # A changed path whose top-level dir carries the NAME of a module
+            # this project links, yet neither mapping route matched it — the
+            # map itself is broken (the 2026-07-05/2026-07-11 failure class).
+            unmatched_known.add(top)
+    if unmatched_known:
+        sample = [l for l in out.splitlines() if l][:15]
+        print(
+            f"[staging-diff] error: submodule {sub_path}: changed paths for "
+            f"linked module(s) {sorted(unmatched_known)} could not be mapped "
+            f"(sym_map={len(sym_map)} entries, link_map={len(link_map)} "
+            f"entries). Sample changed paths: {sample}",
+            file=sys.stderr,
+        )
+        raise SystemExit(
+            f"error: submodule {sub_path}: module mapping failed for "
+            f"{sorted(unmatched_known)} — refusing to emit a partial upgrade "
+            f"list (modules would silently ship without their migrations)."
+        )
+    if not found and out.strip() and verbose:
+        sample = [l for l in out.splitlines() if l][:10]
+        print(
+            f"[staging-diff] {sub_path}: bump touches no linked module "
+            f"(benign if only non-deployed modules changed). Sample: {sample}",
+            file=sys.stderr,
+        )
     return found
 
 
@@ -260,6 +345,13 @@ def main() -> int:
         print(f"[staging-diff] repo={repo} base={base} head={head}", file=sys.stderr)
 
     sym_map = addons_symlink_map(addons_dir)
+    link_map = addons_link_map(repo, head)
+    if args.verbose:
+        print(
+            f"[staging-diff] addons map: filesystem={len(sym_map)} entries, "
+            f"git-tree={len(link_map)} entries",
+            file=sys.stderr,
+        )
     modules: set[str] = set()
 
     sub_changes = submodule_sha_changes(base, head, repo)
@@ -270,7 +362,7 @@ def main() -> int:
         else:
             print("[staging-diff] no submodule pointer changes detected", file=sys.stderr)
     for sub_path, (old, new) in sub_changes.items():
-        found = modules_from_submodule_diff(repo, sub_path, old, new, sym_map, verbose=args.verbose)
+        found = modules_from_submodule_diff(repo, sub_path, old, new, sym_map, verbose=args.verbose, link_map=link_map)
         if args.verbose:
             print(f"[staging-diff] {sub_path}: modules from submodule diff: {sorted(found) or '(none)'}", file=sys.stderr)
         modules |= found

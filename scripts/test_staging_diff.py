@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from staging_diff import modules_from_submodule_diff
+from staging_diff import addons_link_map, modules_from_submodule_diff
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -145,3 +145,70 @@ def test_vendored_module_change_makes_upgrade_list(project_with_vendored):
 
     result = _run_staging_diff(repo, base, head)
     assert "sap_b1_to_odoo" in result["modules"]
+
+
+# ---------------------------------------------------------------------------
+# 2026-07-11 fitcrew prod incident (second occurrence of 2026-07-05):
+# in CI the filesystem-based sym_map failed to match a bumped submodule's
+# modules (unreproducible outside the runner) and the upgrade list silently
+# shipped without bemade_sports_clinic. The mapping must not depend on the
+# checkout filesystem, and an unmappable KNOWN module must fail the job.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def project_with_committed_symlink(project_with_submodule):
+    """The base fixture plus a project-level git history committing the
+    addons/<name> symlink, so the git-tree link map has something to read."""
+    repo, sub_path, old_sha, new_sha, sym_map = project_with_submodule
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "ci@test")
+    _git(repo, "config", "user.name", "ci")
+    # Don't commit .repos/ content as part of the project tree; the symlink
+    # is what matters for the link map.
+    (repo / ".gitignore").write_text(".repos/\n")
+    _git(repo, "add", ".gitignore", "addons")
+    _git(repo, "commit", "-q", "-m", "project with addons symlink")
+    head = _git(repo, "rev-parse", "HEAD")
+    return repo, sub_path, old_sha, new_sha, sym_map, head
+
+
+def test_git_tree_map_is_filesystem_independent(project_with_committed_symlink):
+    """The git-tree link map alone (empty filesystem sym_map) must map the
+    bumped submodule's module — this is the fix for the incident class where
+    the filesystem map came up empty in CI."""
+    repo, sub_path, old_sha, new_sha, _sym_map, head = project_with_committed_symlink
+    link_map = addons_link_map(repo, head)
+    assert link_map.get(f"{sub_path}/my_module") == "my_module"
+
+    result = modules_from_submodule_diff(
+        repo, sub_path, old_sha, new_sha, sym_map={}, link_map=link_map
+    )
+    assert result == {"my_module"}
+
+
+def test_fails_loud_when_linked_module_cannot_be_mapped(project_with_submodule):
+    """A changed path whose top-level dir NAME is a linked module, with a
+    mapping that cannot place it (wrong target path, empty sym_map), must
+    raise instead of emitting a partial upgrade list."""
+    repo, sub_path, old_sha, new_sha, _sym_map, = (*project_with_submodule,)
+    broken_link_map = {".repos/somewhere-else/my_module": "my_module"}
+
+    with pytest.raises(SystemExit) as exc:
+        modules_from_submodule_diff(
+            repo, sub_path, old_sha, new_sha, sym_map={}, link_map=broken_link_map
+        )
+    assert "partial upgrade list" in str(exc.value)
+
+
+def test_benign_unlinked_module_bump_stays_empty(project_with_submodule):
+    """A bump touching only modules this project does NOT link (e.g. another
+    client's modules in a shared addons repo) is a legitimate empty result —
+    no exception."""
+    repo, sub_path, old_sha, new_sha, _sym_map = project_with_submodule
+    other_map = {f"{sub_path}/other_module": "other_module"}
+
+    result = modules_from_submodule_diff(
+        repo, sub_path, old_sha, new_sha, sym_map={}, link_map=other_map
+    )
+    assert result == set()
