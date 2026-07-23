@@ -981,7 +981,7 @@ vendor_check:
     - |
       if [ -n "${CI_JOB_TOKEN:-}" ] && [ -n "${CI_SERVER_HOST:-}" ]; then
         git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "https://${CI_SERVER_HOST}/"
-        git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "git@${CI_SERVER_HOST}:"
+        git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "git@${CI_SERVER_HOST}:"
       fi
     # Clone odoo-dev WITHOUT submodules and install from the local path. A
     # `pip install git+ssh://…odoo-dev` recurses submodules, and odoo-dev's
@@ -1026,7 +1026,7 @@ vendor_update:
     - |
       if [ -n "${CI_JOB_TOKEN:-}" ] && [ -n "${CI_SERVER_HOST:-}" ]; then
         git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "https://${CI_SERVER_HOST}/"
-        git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "git@${CI_SERVER_HOST}:"
+        git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "git@${CI_SERVER_HOST}:"
       fi
     - git clone --depth 1 -b "${ODOO_DEV_REF:-master}" git@github.com:bemade/odoo-dev.git /tmp/odoo-dev
     - pip install --quiet /tmp/odoo-dev
