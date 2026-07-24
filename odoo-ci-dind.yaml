@@ -348,6 +348,13 @@ deploy:
   script:
     - |
       set -e
+      # Optional remote cluster: DEPLOY_KUBECONFIG is a GitLab *file* variable
+      # holding a kubeconfig. When set, kubectl targets that cluster instead of
+      # the runner's own (in-pod serviceaccount). Lets a project deploy to an
+      # OdooInstance living outside the runner cluster.
+      if [ -n "$DEPLOY_KUBECONFIG" ]; then
+        export KUBECONFIG="$DEPLOY_KUBECONFIG"
+      fi
       CONTAINER_IMAGE="${CONTAINER_IMAGE//:443/}"
       IMAGE_DIGEST=$(cat image-digest.txt)
       
@@ -705,6 +712,11 @@ upgrade-modules:
   script:
     - |
       set -e
+
+      # Same optional remote-cluster support as the deploy job.
+      if [ -n "$DEPLOY_KUBECONFIG" ]; then
+        export KUBECONFIG="$DEPLOY_KUBECONFIG"
+      fi
 
       if [ ! -f staging-refresh.json ]; then
         echo "staging-refresh.json artifact not found from build job - cannot proceed."
