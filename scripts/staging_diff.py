@@ -216,6 +216,12 @@ def modules_from_submodule_diff(
             f"{err.strip()}"
         )
     found: set[str] = set()
+    # build.sh materializes addons/<name> symlinks into real directories before
+    # this script runs in the build job: the submodule module dir no longer
+    # resolves to the addons/ entry, so the resolve()-equality lookup misses.
+    # The basename still identifies the module (addons/<m> → .repos/<repo>/<m>
+    # by construction), so fall back to a name match against known addons.
+    known_names = set(sym_map.values())
     for line in out.splitlines():
         if not line:
             continue
@@ -225,6 +231,8 @@ def modules_from_submodule_diff(
                 key = cur.resolve()
                 if key in sym_map:
                     found.add(sym_map[key])
+                elif cur.name in known_names:
+                    found.add(cur.name)
                 break
             cur = cur.parent
     return found
