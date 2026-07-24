@@ -22,9 +22,16 @@ variable "BUILD_TEST" {
   default = ""
 }
 
-# Determine base images based on COMMUNITY flag
+# Set to include the official design themes in a community base image
+# (enterprise already ships them). Opt-in per project via the THEMES CI
+# variable.
+variable "THEMES" {
+  default = ""
+}
+
+# Determine base images based on COMMUNITY / THEMES flags
 variable "PROD_BASE_IMAGE" {
-  default = "${COMMUNITY != "" ? "odoo-community-${ODOO_VERSION}:latest" : "odoo-enterprise-${ODOO_VERSION}:latest"}"
+  default = "${COMMUNITY != "" ? (THEMES != "" ? "odoo-community-themes-${ODOO_VERSION}:latest" : "odoo-community-${ODOO_VERSION}:latest") : "odoo-enterprise-${ODOO_VERSION}:latest"}"
 }
 
 variable "CI_BASE_IMAGE" {

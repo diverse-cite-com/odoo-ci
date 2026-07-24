@@ -5,6 +5,8 @@
 #   CONTAINER_IMAGE, ODOO_VERSION
 # Optional:
 #   COMMUNITY - set to use community base image
+#   THEMES - with COMMUNITY: set to use the community base image that ships
+#            the official design themes (odoo-community-themes-*)
 #   TEST_ENABLED - set to "true" to also build test image
 
 set -ex
@@ -187,6 +189,7 @@ REGISTRY=${CI_REGISTRY} \
 CONTAINER_IMAGE=${CONTAINER_IMAGE} \
 BUILD_DATE=${BUILD_DATE} \
 COMMUNITY=${COMMUNITY:-} \
+THEMES=${THEMES:-} \
 BUILDX_BAKE_ENTITLEMENTS_FS=0 \
 docker buildx bake --push \
   --set "*.platform=linux/amd64" \
