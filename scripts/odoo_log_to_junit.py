@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import os
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -215,9 +216,24 @@ class OdooLogParser:
         match = self.SKIP_PATTERN.search(line)
         if match:
             ts_str, module, test_file, test_name, reason = match.groups()
-            self._finish_current_test(
-                ts_str, status="skipped", message=reason.strip()
-            )
+            if self.current_test and self.current_test.name == test_name:
+                self._finish_current_test(
+                    ts_str, status="skipped", message=reason.strip()
+                )
+            else:
+                # No matching "Starting ..." line in flight. Normally startTest
+                # always precedes addSkip, but a truncated log (output limits)
+                # can drop the start line — and losing the skip along with it
+                # would silently under-report exactly what we gate on. Record it
+                # standalone instead, and leave any unrelated in-flight test be.
+                test = TestCase(
+                    name=test_name,
+                    classname=f"{module}.tests.{test_file}",
+                    module=module,
+                    status="skipped",
+                    message=reason.strip(),
+                )
+                self.get_or_create_suite(module).tests.append(test)
             return
 
         # Check for FAIL
@@ -288,14 +304,25 @@ class OdooLogParser:
 # These all mean the SAME thing operationally: the tour did not run. Odoo raises
 # unittest.SkipTest for every one of them, which keeps the job green — so an
 # entire browser-test suite can vanish without any signal.
+# Deliberately NOT a loose match on the word "browser": a developer's own
+# @unittest.skip("only meaningful in a browser") would then fail the build for
+# no reason. These terms track the actual reason strings above.
 BROWSER_SKIP_PATTERN = re.compile(
-    r"chrome|chromium|devtools|dev\s+tools|headless|websocket-client|browser",
+    r"chrome|chromium|devtools|dev\s+tools|headless|websocket-client",
     re.IGNORECASE,
 )
 
 
-def browser_skips(suites: dict[str, TestSuite]) -> list[TestCase]:
-    """Return skipped tests whose reason indicates the browser never started."""
+def browser_skips(
+    suites: dict[str, TestSuite],
+    allow: "list[re.Pattern] | None" = None,
+) -> list[TestCase]:
+    """Return skipped tests whose reason indicates the browser never started.
+
+    ``allow`` excuses reasons that match — for the case where a browser-ish
+    skip is genuinely expected in this environment and has been signed off.
+    """
+    allow = allow or []
     return [
         test
         for suite in suites.values()
@@ -303,6 +330,7 @@ def browser_skips(suites: dict[str, TestSuite]) -> list[TestCase]:
         if test.status == "skipped"
         and test.message
         and BROWSER_SKIP_PATTERN.search(test.message)
+        and not any(a.search(test.message) for a in allow)
     ]
 
 
@@ -400,6 +428,17 @@ def main():
         action="store_true",
         help="Exit non-zero if ANY test was skipped, whatever the reason.",
     )
+    parser.add_argument(
+        "--allow-skip-reason",
+        action="append",
+        default=[],
+        metavar="REGEX",
+        help=(
+            "Skip reasons matching this regex never fail the build. Repeatable. "
+            "For signing off a browser-ish skip that is genuinely expected here "
+            "— prefer fixing the cause; an allowlist entry hides a real gap."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -493,15 +532,34 @@ def main():
 
     # Skip gates. Deliberately AFTER the XML is written, so the report is still
     # published when the gate trips.
+    allow = [re.compile(r, re.IGNORECASE) for r in args.allow_skip_reason]
+
+    # Surface every skip that is NOT going to fail the build. These are usually
+    # legitimate under CI — no demo data, an optional dependency absent — but a
+    # skip nobody ever sees is how coverage rots quietly.
+    failing = set()
     if args.fail_on_skip:
-        offenders = all_skips(suites)
+        offenders = [t for t in all_skips(suites)
+                     if not any(a.search(t.message or "") for a in allow)]
         label = "skipped test(s)"
     elif args.fail_on_browser_skip:
-        offenders = browser_skips(suites)
+        offenders = browser_skips(suites, allow)
         label = "browser test(s) skipped because the browser never started"
     else:
         offenders = []
         label = ""
+    failing = {id(t) for t in offenders}
+
+    tolerated = [t for t in all_skips(suites) if id(t) not in failing]
+    if tolerated:
+        in_actions = bool(os.environ.get("GITHUB_ACTIONS"))
+        print(f"\nSkipped but not failing ({len(tolerated)}):", file=sys.stderr)
+        for test in tolerated:
+            line = f"  - {test.classname}.{test.name}: {test.message}"
+            print(line, file=sys.stderr)
+            if in_actions:
+                print(f"::warning title=Test skipped::"
+                      f"{test.classname}.{test.name}: {test.message}")
 
     if offenders:
         print(

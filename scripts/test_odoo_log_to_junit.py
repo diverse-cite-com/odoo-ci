@@ -154,3 +154,55 @@ class TestClassLevelSkips:
         sale = [t for t in suites["sale"].tests if t.name == "TestSaleOrder.test_confirm"]
         assert sale and sale[0].status == "passed"
         assert only_test(suites, "base").status == "skipped"
+
+
+# --- reasons that are legitimate under CI and must NOT fail the build ---
+LEGIT_SKIPS = [
+    "Needs demo data to be able to import those files",
+    "pdfminer not installed",
+    "aiosmtpd couldn't be imported",
+    "unaccent not enabled",
+    "Could not load the PdfSigner class properly",
+    "only meaningful in a browser environment",   # a developer's own skip
+]
+
+
+class TestLegitimateCiSkips:
+    @pytest.mark.parametrize("reason", LEGIT_SKIPS)
+    def test_legit_skip_is_not_a_browser_skip(self, reason):
+        """These come up on real CI runs; failing on them would be noise."""
+        line = (
+            "2026-01-28 13:30:01,900 44 INFO odoo-test "
+            "odoo.addons.base.tests.test_x: "
+            f"skipped TestX.test_y : {reason}"
+        )
+        suites = parse([START_PLAIN, line])
+        assert browser_skips(suites) == [], f"false positive on: {reason}"
+
+    def test_legit_skips_are_still_recorded_as_skipped(self):
+        line = (
+            "2026-01-28 13:30:01,900 44 INFO odoo-test "
+            "odoo.addons.base.tests.test_x: "
+            "skipped TestX.test_y : pdfminer not installed"
+        )
+        suites = parse([line])
+        assert suites["base"].skipped == 1
+
+
+class TestAllowlist:
+    def test_allowlist_excuses_a_browser_skip(self):
+        suites = parse([START, SKIP_CHROME_PORT])
+        import re as _re
+        allow = [_re.compile("devtools port", _re.IGNORECASE)]
+        assert browser_skips(suites, allow) == []
+
+    def test_allowlist_does_not_excuse_unrelated_browser_skips(self):
+        line = (
+            "2026-01-28 13:29:26,912 44 INFO odoo-test "
+            "odoo.addons.kanit_portal.tests.test_portal_tour: "
+            "skipped TestPortalTour.test_tour : Chrome executable not found"
+        )
+        import re as _re
+        suites = parse([START, line])
+        allow = [_re.compile("devtools port", _re.IGNORECASE)]
+        assert len(browser_skips(suites, allow)) == 1
