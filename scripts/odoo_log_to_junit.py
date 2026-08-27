@@ -94,8 +94,29 @@ class OdooLogParser:
     )
 
     # Pattern for final summary: 3 failed, 0 error(s) of 1465 tests
+    # NOTE: Odoo's OdooTestResult.__str__ omits the skip count entirely, and
+    # wasSuccessful() is `failures == errors == 0` — so skips never influence
+    # the exit status. They have to be counted from the log lines below.
     SUMMARY_PATTERN = re.compile(
         r"(\d+)\s*failed,\s*(\d+)\s*error\(s\)\s*of\s*(\d+)\s*tests"
+    )
+
+    # Pattern: INFO odoo odoo.addons.web.tests.test_tour: skipped TestX.test_y : <reason>
+    # Emitted by OdooTestResult.addSkip at INFO level (odoo/tests/result.py).
+    SKIP_PATTERN = re.compile(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}).*?"
+        r"INFO.*?odoo\.addons\.(\w+)\.tests\.(\w+).*?:\s*skipped\s+(\S+)\s*:\s*(.*)$"
+    )
+
+    # Class-level skips come through the odoo.tests.suite logger with the class
+    # path in parentheses and NO preceding "Starting ..." line:
+    #   skipped setUpClass (odoo.addons.base.tests.test_x.TestClass) : <reason>
+    # A skipped setUpClass takes every test in the class with it, so these
+    # represent the largest single blocks of lost coverage.
+    SKIP_CLASS_PATTERN = re.compile(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}).*?"
+        r"INFO.*?odoo\.tests\.suite.*?:\s*skipped\s+(\S+)\s+"
+        r"\(odoo\.addons\.(\w+)\.tests\.(\w+)\.(\w+)\)\s*:\s*(.*)$"
     )
 
     def __init__(self):
@@ -170,6 +191,35 @@ class OdooLogParser:
             suite.tests.append(test)
             return
 
+        # Check for a class-level SKIP (setUpClass/tearDownClass). Must run
+        # before the per-test SKIP pattern, whose \S+ would otherwise swallow
+        # the method name and mis-parse the reason.
+        match = self.SKIP_CLASS_PATTERN.search(line)
+        if match:
+            ts_str, method, module, test_file, class_name, reason = match.groups()
+            # Standalone: there is no in-flight test to finish, and any test
+            # that IS in flight belongs to a different class — leave it alone.
+            test = TestCase(
+                name=f"{class_name}.{method}",
+                classname=f"{module}.tests.{test_file}",
+                module=module,
+                status="skipped",
+                message=reason.strip(),
+            )
+            self.get_or_create_suite(module).tests.append(test)
+            return
+
+        # Check for SKIP. Must run before FAIL/ERROR: a skipped test has
+        # already been "Started", and without this it falls through to
+        # _finish_current_test's default status of "passed".
+        match = self.SKIP_PATTERN.search(line)
+        if match:
+            ts_str, module, test_file, test_name, reason = match.groups()
+            self._finish_current_test(
+                ts_str, status="skipped", message=reason.strip()
+            )
+            return
+
         # Check for FAIL
         match = self.FAIL_PATTERN.search(line)
         if match:
@@ -192,7 +242,12 @@ class OdooLogParser:
                 self.suites[module].time = float(time_s)
             return
 
-    def _finish_current_test(self, ts_str: str, status: str = "passed"):
+    def _finish_current_test(
+        self,
+        ts_str: str,
+        status: str = "passed",
+        message: Optional[str] = None,
+    ):
         """Finish the current test and add it to its suite."""
         if self.current_test and self.current_test_start:
             end_time = self.parse_timestamp(ts_str)
@@ -200,6 +255,8 @@ class OdooLogParser:
                 end_time - self.current_test_start
             ).total_seconds()
             self.current_test.status = status
+            if message:
+                self.current_test.message = message
 
             suite = self.get_or_create_suite(self.current_test.module)
             suite.tests.append(self.current_test)
@@ -222,6 +279,43 @@ class OdooLogParser:
         return self.suites
 
 
+# Skip reasons raised on the headless-browser path in odoo/tests/common.py
+# (19.0): "Chrome executable not found", "Failed to detect chrome devtools port
+# after ...", "Error during Chrome headless connection", "Error during Chrome
+# connection: never found 'page' target", "Cannot connect to chrome dev tools",
+# "websocket-client module is not installed".
+#
+# These all mean the SAME thing operationally: the tour did not run. Odoo raises
+# unittest.SkipTest for every one of them, which keeps the job green — so an
+# entire browser-test suite can vanish without any signal.
+BROWSER_SKIP_PATTERN = re.compile(
+    r"chrome|chromium|devtools|dev\s+tools|headless|websocket-client|browser",
+    re.IGNORECASE,
+)
+
+
+def browser_skips(suites: dict[str, TestSuite]) -> list[TestCase]:
+    """Return skipped tests whose reason indicates the browser never started."""
+    return [
+        test
+        for suite in suites.values()
+        for test in suite.tests
+        if test.status == "skipped"
+        and test.message
+        and BROWSER_SKIP_PATTERN.search(test.message)
+    ]
+
+
+def all_skips(suites: dict[str, TestSuite]) -> list[TestCase]:
+    """Return every skipped test."""
+    return [
+        test
+        for suite in suites.values()
+        for test in suite.tests
+        if test.status == "skipped"
+    ]
+
+
 def generate_junit_xml(suites: dict[str, TestSuite]) -> ET.Element:
     """Generate JUnit XML from parsed test suites."""
     testsuites = ET.Element("testsuites")
@@ -229,11 +323,13 @@ def generate_junit_xml(suites: dict[str, TestSuite]) -> ET.Element:
     total_tests = sum(len(s.tests) for s in suites.values())
     total_failures = sum(s.failures for s in suites.values())
     total_errors = sum(s.errors for s in suites.values())
+    total_skipped = sum(s.skipped for s in suites.values())
     total_time = sum(s.time for s in suites.values())
 
     testsuites.set("tests", str(total_tests))
     testsuites.set("failures", str(total_failures))
     testsuites.set("errors", str(total_errors))
+    testsuites.set("skipped", str(total_skipped))
     testsuites.set("time", f"{total_time:.3f}")
 
     for suite_name, suite in sorted(suites.items()):
@@ -290,6 +386,20 @@ def main():
     parser.add_argument(
         "-v", "--verbose", action="store_true", help="Print summary to stdout"
     )
+    parser.add_argument(
+        "--fail-on-browser-skip",
+        action="store_true",
+        help=(
+            "Exit non-zero if any test was skipped because the headless browser "
+            "did not start. Odoo turns those into unittest.SkipTest, which keeps "
+            "the job green while no tour actually ran."
+        ),
+    )
+    parser.add_argument(
+        "--fail-on-skip",
+        action="store_true",
+        help="Exit non-zero if ANY test was skipped, whatever the reason.",
+    )
 
     args = parser.parse_args()
 
@@ -343,6 +453,8 @@ def main():
         total_failures = sum(s.failures for s in suites.values())
         total_errors = sum(s.errors for s in suites.values())
         total_time = sum(s.time for s in suites.values())
+        total_skipped = sum(s.skipped for s in suites.values())
+        browser_skipped = len(browser_skips(suites))
 
         # Count HOOT subtests separately
         hoot_tests = total_tests - python_tests
@@ -356,19 +468,53 @@ def main():
         print(
             f"Total (JUnit): {total_tests} tests, {total_failures} failures, {total_errors} errors"
         )
+        print(f"Skipped: {total_skipped} ({browser_skipped} browser/tour)")
         print(f"Time: {total_time:.2f}s")
         print(f"\nPer module:")
         for name, suite in sorted(suites.items()):
-            status = "✓" if suite.failures == 0 and suite.errors == 0 else "✗"
+            if suite.failures or suite.errors:
+                status = "✗"
+            elif suite.skipped:
+                # Not a pass. A skipped tour is a test that did not run.
+                status = "⚠"
+            else:
+                status = "✓"
             py_count = sum(1 for t in suite.tests if not t.is_subtest)
             hoot_count = sum(1 for t in suite.tests if t.is_subtest)
             count_str = f"{py_count} python"
             if hoot_count > 0:
                 count_str += f", {hoot_count} hoot"
+            skip_str = f", {suite.skipped} skipped" if suite.skipped else ""
             print(
-                f"  {status} {name}: {count_str}, {suite.failures} failures ({suite.time:.2f}s)"
+                f"  {status} {name}: {count_str}, {suite.failures} failures"
+                f"{skip_str} ({suite.time:.2f}s)"
             )
         print(f"\nJUnit XML written to: {args.output}")
+
+    # Skip gates. Deliberately AFTER the XML is written, so the report is still
+    # published when the gate trips.
+    if args.fail_on_skip:
+        offenders = all_skips(suites)
+        label = "skipped test(s)"
+    elif args.fail_on_browser_skip:
+        offenders = browser_skips(suites)
+        label = "browser test(s) skipped because the browser never started"
+    else:
+        offenders = []
+        label = ""
+
+    if offenders:
+        print(
+            f"\nERROR: {len(offenders)} {label}. "
+            f"A skip is not a pass — failing the build.",
+            file=sys.stderr,
+        )
+        for test in offenders:
+            print(
+                f"  - {test.classname}.{test.name}: {test.message}",
+                file=sys.stderr,
+            )
+        sys.exit(2)
 
 
 if __name__ == "__main__":
