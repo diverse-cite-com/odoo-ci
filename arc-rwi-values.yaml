@@ -1,0 +1,77 @@
+# ARC (gha-runner-scale-set) values for the RWI pre-merge test gate.
+#
+# Companion to gitlab-runner-values.yaml: same cluster, same job — run Odoo
+# module tests — but driven by GitHub Actions instead of GitLab CI, because
+# RWI moved to GitHub + Odoo.sh and Odoo.sh publishes no commit statuses or
+# check runs that a branch ruleset could require.
+#
+# Install:
+#   helm install arc-rwi \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set \
+#     --namespace arc-runners -f arc-rwi-values.yaml
+#
+# `runs-on:` in the workflow must equal runnerScaleSetName below.
+
+githubConfigUrl: https://github.com/Refractories-West-Inc/odoo
+githubConfigSecret: arc-rwi-github
+
+runnerScaleSetName: arc-rwi-odoo
+
+# Scale to zero between PRs; Odoo test jobs are long but infrequent.
+minRunners: 0
+maxRunners: 2
+
+containerMode:
+  # dind, not kubernetes mode, for two reasons:
+  #  1. Kubernetes mode needs an RWX volume for _work. The available RWX
+  #     classes here are cephfs and juice, both of which sit on storage that
+  #     has been unreliable; a CI gate that blocks every merge should not
+  #     inherit that dependency.
+  #  2. Registry credentials stay in the cluster. The job container comes from
+  #     private registry.bemade.org, and in dind mode the runner's docker CLI
+  #     authenticates from a mounted secret (see DOCKER_CONFIG below) — so no
+  #     Bemade registry credentials need to be stored as secrets in the
+  #     client's GitHub organisation.
+  type: dind
+
+template:
+  spec:
+    # Match gitlab-runner: prefer the compute-labelled nodes.
+    # NOTE: brain01 carries that label but has a known-slow disk (consumer
+    # SSD, IO saturation). If Odoo test runs are erratic, pin to node04.
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: bemade.org/compute
+                  operator: In
+                  values: ["true"]
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:latest
+        command: ["/home/runner/run.sh"]
+        env:
+          # Points the runner's docker CLI at a mounted, read-only pull
+          # credential for registry.bemade.org. Deliberately NOT the default
+          # /home/runner/.docker, which the dind setup also writes to.
+          - name: DOCKER_CONFIG
+            value: /home/runner/.docker-auth
+        volumeMounts:
+          - name: registry-auth
+            mountPath: /home/runner/.docker-auth
+            readOnly: true
+        resources:
+          requests:
+            cpu: "2"
+            memory: 6Gi
+          limits:
+            memory: 12Gi
+    volumes:
+      - name: registry-auth
+        secret:
+          secretName: registry-bemade-dockerconfig
+          items:
+            - key: .dockerconfigjson
+              path: config.json
