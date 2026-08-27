@@ -17,6 +17,13 @@ githubConfigSecret: arc-rwi-github
 
 runnerScaleSetName: arc-rwi-odoo
 
+# Pin the controller's ServiceAccount rather than relying on label discovery.
+# The chart's auto-discovery fails outside a live cluster context (helm template
+# / CI validation) and its error tells you to set this explicitly.
+controllerServiceAccount:
+  namespace: arc-systems
+  name: arc-gha-rs-controller
+
 # Scale to zero between PRs; Odoo test jobs are long but infrequent.
 minRunners: 0
 maxRunners: 2
