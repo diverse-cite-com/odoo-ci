@@ -177,7 +177,9 @@ your-project/
 | `Dockerfile` | Client Odoo image with addons (enterprise and community) |
 | `docker-bake.hcl` | BuildKit bake file for parallel builds |
 | `scripts/build.sh` | Docker image build script |
-| `scripts/odoo_log_to_junit.py` | Converts Odoo test logs to JUnit XML |
+| `scripts/odoo_log_to_junit.py` | Converts Odoo test logs to JUnit XML, and gates on silently skipped browser tests |
+| `scripts/arc-finish.sh` | Installs a GitHub Actions runner scale set for a client (see `docs/github-actions-runner.md`) |
+| `arc-*-values.yaml` | Helm values for each GitHub Actions runner scale set |
 | `test-local.sh` | Local testing script for CI images |
 
 ## Build Performance

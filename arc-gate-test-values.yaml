@@ -1,0 +1,82 @@
+# ARC (gha-runner-scale-set) values for the internal CI smoke target.
+#
+# Serves bemade/arc-gate-test: one module, one tour, ~2 minutes. Its job is to
+# make runner failures cheap to diagnose, so the runner itself gets debugged
+# there rather than inside a blocked client pull request.
+#
+# Install:
+#   APP_ID=<internal app id> ACCOUNT=bemade RELEASE=arc-gate-test \
+#     VALUES=arc-gate-test-values.yaml scripts/arc-finish.sh <app-key.pem>
+#
+# `runs-on:` in the workflow must equal runnerScaleSetName below.
+
+githubConfigUrl: https://github.com/bemade/arc-gate-test
+githubConfigSecret: arc-gate-test-github
+
+runnerScaleSetName: arc-gate-test
+
+# Pin the controller's ServiceAccount rather than relying on label discovery.
+# The chart's auto-discovery fails outside a live cluster context (helm template
+# / CI validation) and its error tells you to set this explicitly.
+controllerServiceAccount:
+  namespace: arc-systems
+  name: arc-gha-rs-controller
+
+# Scale to zero between runs; this suite is short and runs rarely.
+minRunners: 0
+maxRunners: 1
+
+containerMode:
+  # dind, not kubernetes mode, for two reasons:
+  #  1. Kubernetes mode needs an RWX volume for _work. The available RWX
+  #     classes here are cephfs and juice, both of which sit on storage that
+  #     has been unreliable; a CI gate that blocks every merge should not
+  #     inherit that dependency.
+  #  2. Registry credentials stay in the cluster. The job container comes from
+  #     private registry.bemade.org, and in dind mode the runner's docker CLI
+  #     authenticates from a mounted secret (see DOCKER_CONFIG below) — so no
+  #     Bemade registry credentials need to be stored as secrets in the
+  #     client's GitHub organisation.
+  type: dind
+
+template:
+  spec:
+    # Match gitlab-runner: prefer the compute-labelled nodes.
+    # NOTE: brain01 carries that label but has a known-slow disk (consumer
+    # SSD, IO saturation). If Odoo test runs are erratic, pin to node04.
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: bemade.org/compute
+                  operator: In
+                  values: ["true"]
+    containers:
+      - name: runner
+        image: ghcr.io/actions/actions-runner:latest
+        command: ["/home/runner/run.sh"]
+        env:
+          # Points the runner's docker CLI at a mounted, read-only pull
+          # credential for registry.bemade.org. Deliberately NOT the default
+          # /home/runner/.docker, which the dind setup also writes to.
+          - name: DOCKER_CONFIG
+            value: /home/runner/.docker-auth
+        volumeMounts:
+          - name: registry-auth
+            mountPath: /home/runner/.docker-auth
+            readOnly: true
+        resources:
+          requests:
+            cpu: "2"
+            memory: 4Gi
+          limits:
+            memory: 8Gi
+    volumes:
+      - name: registry-auth
+        secret:
+          secretName: registry-bemade-dockerconfig
+          items:
+            - key: .dockerconfigjson
+              path: config.json
