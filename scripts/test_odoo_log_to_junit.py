@@ -206,3 +206,41 @@ class TestAllowlist:
         suites = parse([START, line])
         allow = [_re.compile("devtools port", _re.IGNORECASE)]
         assert len(browser_skips(suites, allow)) == 1
+
+
+# Real line from an RWI CI run: test packages can nest, so the dotted path
+# between "tests." and the class name is not always a single component.
+SKIP_NESTED = (
+    "2026-08-27 16:55:05,799 409 INFO odoo odoo.tests.suite: skipped setUpClass "
+    "(odoo.addons.sap_b1_to_odoo.tests.pipelines."
+    "test_property_field_write_failure_3623_3624.TestPropertyFieldWriteFailureIntegration)"
+    " : SAP source DB unreachable on localhost:5433"
+)
+SKIP_NESTED_BROWSER = (
+    "2026-08-27 16:55:05,799 409 INFO odoo odoo.tests.suite: skipped setUpClass "
+    "(odoo.addons.some_mod.tests.tours.deep.test_x.TestTour)"
+    " : Chrome executable not found"
+)
+
+
+class TestNestedTestPackages:
+    def test_nested_class_skip_is_recorded(self):
+        """A skipped setUpClass in a nested tests package must not vanish."""
+        suites = parse([SKIP_NESTED])
+        assert only_test(suites, "sap_b1_to_odoo").status == "skipped"
+
+    def test_nested_class_skip_keeps_the_class_name(self):
+        suites = parse([SKIP_NESTED])
+        assert "TestPropertyFieldWriteFailureIntegration" in only_test(
+            suites, "sap_b1_to_odoo").name
+
+    def test_nested_class_skip_reason_captured(self):
+        suites = parse([SKIP_NESTED])
+        assert "SAP source DB unreachable" in only_test(
+            suites, "sap_b1_to_odoo").message
+
+    def test_nested_browser_class_skip_still_fails_the_gate(self):
+        """The blindness this guards against: a browser setUpClass skip in a
+        nested package must still be caught."""
+        suites = parse([SKIP_NESTED_BROWSER])
+        assert len(browser_skips(suites)) == 1

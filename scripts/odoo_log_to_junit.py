@@ -114,10 +114,16 @@ class OdooLogParser:
     #   skipped setUpClass (odoo.addons.base.tests.test_x.TestClass) : <reason>
     # A skipped setUpClass takes every test in the class with it, so these
     # represent the largest single blocks of lost coverage.
+    # The dotted path between "tests." and the class name is NOT always a
+    # single component: test packages nest, e.g.
+    #   odoo.addons.sap_b1_to_odoo.tests.pipelines.test_foo.TestBar
+    # Capture the whole tail and split off the class in code, so nesting of any
+    # depth is handled. Getting this wrong silently drops the skip, and a
+    # skipped setUpClass takes its entire class with it.
     SKIP_CLASS_PATTERN = re.compile(
         r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}).*?"
         r"INFO.*?odoo\.tests\.suite.*?:\s*skipped\s+(\S+)\s+"
-        r"\(odoo\.addons\.(\w+)\.tests\.(\w+)\.(\w+)\)\s*:\s*(.*)$"
+        r"\(odoo\.addons\.(\w+)\.tests\.([\w.]+)\)\s*:\s*(.*)$"
     )
 
     def __init__(self):
@@ -197,7 +203,11 @@ class OdooLogParser:
         # the method name and mis-parse the reason.
         match = self.SKIP_CLASS_PATTERN.search(line)
         if match:
-            ts_str, method, module, test_file, class_name, reason = match.groups()
+            ts_str, method, module, tail, reason = match.groups()
+            # tail is "<maybe.nested.pkgs.><file>.<Class>"; the class is last.
+            parts = tail.split(".")
+            class_name = parts[-1] if len(parts) > 1 else tail
+            test_file = ".".join(parts[:-1]) or tail
             # Standalone: there is no in-flight test to finish, and any test
             # that IS in flight belongs to a different class — leave it alone.
             test = TestCase(
