@@ -137,15 +137,35 @@ not read as phishing.
 
 ## 6. The workflow, and the two details that are load-bearing
 
-### `--log-handler=odoo.addons:INFO`
+### Surgical log levels
 
 `OdooTestResult` logs both `Starting <test> ...` and
 `skipped <test> : <reason>` at **INFO**, on the *test module's own* logger.
+Class-level skips (a skipped `setUpClass`, which takes its whole class) arrive
+on `odoo.tests.suite` instead, with no preceding `Starting` line.
 
-The GitLab template runs at `--log-level=warn` alone. At that level **neither
-line is emitted** — which means the JUnit report comes out empty and skipped
-tests are undetectable. Raising just `odoo.addons` to INFO keeps the log
-manageable while making test results visible at all.
+This is a genuine squeeze:
+
+- At `--log-level=warn` alone — what the GitLab template uses — **neither line
+  is emitted**. The JUnit report comes out empty and skips are undetectable.
+- At `--log-handler=odoo.addons:INFO`, the log overruns the runner's output
+  limit, which loses the pass/fail signal entirely.
+
+So raise INFO on **only** the loggers that carry test results: each of *our*
+modules' `tests` loggers, plus `odoo.tests.suite`. Dependency tests never run
+thanks to the two-step install, so nothing else needs raising. The workflow
+builds the handler list from the module list at runtime:
+
+```bash
+HANDLERS="odoo.tests.suite:INFO"
+for m in ${ALL_ADDONS//,/ }; do
+  HANDLERS="${HANDLERS},odoo.addons.${m}.tests:INFO"
+done
+```
+
+Measured on a real run: **~30 lines**, versus ~1.7MB for `odoo.addons:INFO`.
+The flood was never our tests — it is unrelated addon chatter and the browser
+console relay from dependency suites.
 
 ### The skip gate
 
@@ -160,6 +180,17 @@ before this was found.
 
 The final workflow step parses the log and fails the build on browser skips.
 That step is what makes a green run mean the tours actually ran.
+
+**Which skips fail, and which do not.** Only browser-path reasons fail the
+build. These are legitimate under CI and are *reported but tolerated*:
+missing demo data, absent optional dependencies (`pdfminer`, `aiosmtpd`),
+`unaccent not enabled`, and a developer's own `@unittest.skip`. They are
+printed and raised as GitHub Actions warning annotations rather than ignored —
+a skip nobody ever sees is how coverage rots. `--allow-skip-reason <regex>`
+exists to sign off an expected browser-ish skip, but prefer fixing the cause.
+
+The matcher deliberately does **not** match the bare word "browser", so a skip
+reading `only meaningful in a browser` does not fail anything.
 
 > The job's `name:` is the string the ruleset requires. **Renaming the job
 > silently disables the gate** — the required check simply never reports, and
@@ -184,6 +215,24 @@ A gate that never fires and a gate that is broken look identical from outside.
 Run its workflow manually with **`break_browser: true`**. That disables Chrome
 on purpose; the run is **expected to fail** at the skip gate. If it *passes*,
 the gate has stopped working and every green tour run since is suspect.
+
+---
+
+## 7b. Defence in depth: the image validates itself too
+
+The per-repo skip gate is the **second** line of defence. The first is in
+`docker-odoo-enterprise`: its `verify` stage installs a probe module into each
+freshly built `odoo-enterprise-ci` image and runs a real tour.
+
+The browser is a property of the **image**, not of any client repo, so
+validating it once at build time stops a broken browser reaching any pipeline
+at all. That job also refuses to trust the runner's exit code — it asserts on
+the log that the tour *started* and was *not skipped* — because trusting exit
+status is precisely the blindness being removed.
+
+The client-side gate still earns its place: a tour can be skipped for
+repo-specific reasons a good image cannot prevent, such as `websocket-client`
+missing from that repo's `requirements.txt`.
 
 ---
 
