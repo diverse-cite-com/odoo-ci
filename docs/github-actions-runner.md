@@ -238,6 +238,14 @@ missing from that repo's `requirements.txt`.
 
 ## 8. Gotchas already paid for
 
+- **Repeat `--log-handler`; never comma-join it.** Only 19.0 declares the
+  option with `type='comma'`. On 17.0/18.0 a comma-joined value arrives as a
+  single item, and `netsvc.init_logger`'s `logconfig_item.split(':')` raises
+  `ValueError: too many values to unpack` — Odoo dies before starting, so it
+  presents as a total failure rather than a logging problem. The option is
+  `action="append"` on every version, so repeating the flag is portable.
+  This matters for anything spanning the 17/18/19 matrix, including the GitLab
+  template if surgical logging is added there.
 - **Container jobs default to `sh`, not bash.** Even though the image ships
   bash 5.2 on `PATH`, GitHub runs `run:` steps under `sh -e {0}` in a
   container job, so `set -o pipefail` dies with "Illegal option" before doing
