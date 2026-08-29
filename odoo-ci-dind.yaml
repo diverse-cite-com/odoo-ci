@@ -1095,6 +1095,13 @@ mr_up_to_date:
   tags: [kubernetes]
   image: alpine
   interruptible: true
+  # Opt out of stage ordering. This is git plumbing on an alpine image and needs
+  # nothing the build produces, so making it wait for `build` means a stale
+  # branch pays for a full image build before being told to run one merge
+  # command. That cost is not incidental: revalidate_prod_mrs restarts every
+  # open MR's pipeline after each prod merge, and most of those pipelines exist
+  # only to report staleness.
+  needs: []
   variables:
     GIT_DEPTH: 0  # merge-base needs real history, not a shallow clone
   rules:
