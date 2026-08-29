@@ -1197,11 +1197,25 @@ mr_up_to_date:
       git push "https://oauth2:${CI_BOT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "HEAD:${SRC}"
       echo ""
       echo "  merged and pushed $(git rev-parse --short HEAD). A new pipeline is starting on it."
-      # Fail deliberately. This pipeline is testing the PRE-merge tree, so it must
-      # never be allowed to report green - the pipeline on the pushed commit is
-      # the one that decides. Terminating: that pipeline finds the branch already
-      # up to date and pushes nothing.
-      echo "  Failing this run so the stale tree cannot report success."
+      # This pipeline is testing the PRE-merge tree, so it must not be allowed to
+      # report success - the pipeline on the pushed commit is the one that
+      # decides. Terminating: that run finds the branch already up to date and
+      # pushes nothing.
+      #
+      # CANCEL rather than fail. Nothing here is broken, and a failed pipeline
+      # emails every subscriber on what is really just bookkeeping; a cancelled
+      # one is quiet and still is not `success`, so it cannot satisfy
+      # "pipelines must succeed" either. Projects with auto_cancel_pending_pipelines
+      # would get there on their own once the new pipeline registers (this job is
+      # interruptible), but that is a per-project setting, so ask explicitly.
+      curl -s -o /dev/null -w '  cancel pipeline %{http_code}\n' -X POST \
+        --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipelines/${CI_PIPELINE_ID}/cancel" || true
+      # Give the runner time to act on the cancellation before falling back.
+      i=0
+      while [ "$i" -lt 30 ]; do sleep 2; i=$((i+1)); done
+      echo "  still running 60s after requesting cancellation - failing instead,"
+      echo "  so the stale tree cannot report success."
       exit 1
 
 # After a merge lands on prod, start a fresh pipeline on every still-open MR

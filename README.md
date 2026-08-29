@@ -255,8 +255,10 @@ untested *combination*, not untested code.
 **Optional: `AUTO_MERGE_PROD_INTO_MR = "true"`.** Since every merge to prod
 invalidates every open MR, the same mechanical `git merge origin/<prod>` gets
 run N times a day. With this set, `mr_up_to_date` does it for you when it is
-clean, pushes, and fails the current run so the pre-merge tree cannot report
-green — the pipeline on the pushed commit decides. It **never rebases**: a merge
+clean, pushes, and then **cancels** the current run so the pre-merge tree cannot report
+green — the pipeline on the pushed commit decides. Cancel rather than fail:
+nothing is broken, and a failed pipeline emails every subscriber, while a
+cancelled one is quiet and still is not `success`. It **never rebases**: a merge
 only appends, so there is no force-push and staging keeps seeing one identity per
 commit, whereas a rebase would hand staging a second identity for the same
 changes and re-conflict work already resolved there. Conflicts are left alone on
