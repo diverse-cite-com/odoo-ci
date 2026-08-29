@@ -225,6 +225,34 @@ Set these in your GitLab project settings (Settings > CI/CD > Variables):
 | `DEPLOY_TARGETS` | File | YAML mapping branches to k8s targets |
 | `MR_TARGET_BRANCHES` | Variable | Regex: MR target branches that trigger build+test |
 | `REVIEW_ENABLED` | Variable | Set to `"true"` to enable review environments for MRs |
+| `PROD_BRANCHES` | Variable | Regex: branches treated as production for the release-train gate (`mr_up_to_date` + `revalidate_prod_mrs`). Unset = no gate |
+
+### Release-train gate (`PROD_BRANCHES`)
+
+GitLab CE has no merge trains and no merged-results pipelines, so "this MR's
+green describes what will actually land" has to be built by hand. Setting
+`PROD_BRANCHES` (a regex over the MR's **target** branch) turns on two jobs:
+
+- **`mr_up_to_date`** — fails a prod-targeted MR whose branch does not contain
+  the current tip of prod. Combined with *Pipelines must succeed*, a mergeable
+  green is by definition a green against current prod. The fix is
+  `git merge origin/<prod>`, **never** a rebase: under the release-train model
+  the same branch merges into both staging and prod, and rebasing binds it to
+  one of them.
+- **`revalidate_prod_mrs`** — on a push to prod, starts a fresh pipeline on every
+  still-open MR targeting it, so their now-stale greens stop being mergeable.
+  Needs `CI_BOT_TOKEN` (api scope). `allow_failure: true` — a missed
+  revalidation degrades the gate but must not redden a merge that already
+  landed.
+
+Together they serialize prod merges by *invalidation* rather than by queue. The
+residual hole is registration latency: between a merge landing and the new
+pipelines registering, another already-green MR can still be merged. That
+requires two approvals landing seconds apart, and the failure mode is an
+untested *combination*, not untested code.
+
+Also set `allow_merge_on_skipped_pipeline: false` on the project — "skipped
+counts as success" defeats the whole gate.
 
 ### Optional Variables
 
