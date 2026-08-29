@@ -7,6 +7,10 @@
 #                       MRs targeting them must contain the target's tip
 #                       (mr_up_to_date), and a merge onto them revalidates every
 #                       other open MR (revalidate_prod_mrs). Unset = no gate.
+#   AUTO_MERGE_PROD_INTO_MR - "true" to have mr_up_to_date merge the target
+#                       branch into an out-of-date MR automatically when it is
+#                       clean, and push. Never rebases. Requires CI_BOT_TOKEN
+#                       with write_repository. Conflicts are left to a human.
 #   REVIEW_ENABLED    - set to "true" to deploy ephemeral review instances for MRs
 #   ALLOWED_BRANCHES  - legacy, used as fallback for BUILD_BRANCHES
 # Format: re2 regex, see https://github.com/google/re2
@@ -1111,7 +1115,7 @@ mr_up_to_date:
       when: always
     - when: never
   before_script:
-    - apk add --no-cache git
+    - apk add --no-cache git curl jq
   script:
     # Explicit refspec: `git fetch origin <branch>` only updates the remote
     # tracking ref opportunistically, and this check is worthless if it compares
@@ -1119,19 +1123,99 @@ mr_up_to_date:
     - git fetch --quiet origin "+refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:refs/remotes/origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
     - |
       TARGET="origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      SRC="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
       if git merge-base --is-ancestor "$TARGET" HEAD; then
         echo "OK: this branch contains the current tip of ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} ($(git rev-parse --short "$TARGET"))."
         exit 0
       fi
-      echo "FAIL: this branch does NOT contain the current tip of ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}."
-      echo "      ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} is at $(git rev-parse --short "$TARGET"); this branch is at $(git rev-parse --short HEAD)."
+      echo "This branch does NOT contain the current tip of ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}."
+      echo "  ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} is at $(git rev-parse --short "$TARGET"); this branch is at $(git rev-parse --short HEAD)."
       echo ""
-      echo "      A green pipeline here would not describe what actually lands."
-      echo "      Bring the target in and push:"
+
+      # ---- optional: merge the target in automatically -----------------------
+      # Every merge to prod invalidates every open MR, so on a busy prod this is
+      # the same mechanical merge repeated N times a day. Doing it here is safe
+      # in a way a rebase would NOT be: a merge only ever appends to the branch,
+      # so no force-push, no rewritten SHAs, and the branch keeps ONE identity
+      # for commits that staging has already seen. Rebasing would give staging a
+      # second identity for the same changes and re-conflict work that was
+      # already resolved there.
+      #
+      # A conflict is left alone on purpose. Same-addon pin collisions surfacing
+      # on the author's own branch, with the author present, is the mechanism
+      # that catches them early - automating that away just defers it.
+      if [ "${AUTO_MERGE_PROD_INTO_MR:-}" != "true" ]; then
+        echo "  A green pipeline here would not describe what actually lands."
+        echo "  Bring the target in and push:"
+        echo ""
+        echo "      git fetch origin && git merge origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+        echo ""
+        echo "  Do NOT rebase - this branch also has to merge into staging."
+        exit 1
+      fi
+
+      # Guards. Any one of these failing means we report and let a human do it.
+      skip=""
+      [ -n "${CI_BOT_TOKEN:-}" ] || skip="CI_BOT_TOKEN is not set"
+      [ -n "$SRC" ] || skip="source branch name unavailable"
+      [ "$SRC" != "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}" ] || skip="source and target are the same branch"
+      # Never push to a fork - the token has no rights there and should not.
+      if [ -z "$skip" ] && [ "${CI_MERGE_REQUEST_SOURCE_PROJECT_ID:-}" != "${CI_PROJECT_ID}" ]; then
+        skip="merge request comes from a fork"
+      fi
+      # Never push to a protected branch. A mis-targeted MR must not turn into
+      # CI writing to prod or staging.
+      if [ -z "$skip" ]; then
+        code=$(curl -s -o /dev/null -w '%{http_code}' --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+                 "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/protected_branches/${SRC}")
+        [ "$code" = "404" ] || skip="source branch ${SRC} is protected (HTTP ${code})"
+      fi
+      if [ -n "$skip" ]; then
+        echo "  auto-merge skipped: ${skip}"
+        echo ""
+        echo "      git fetch origin && git merge origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+        echo ""
+        echo "  Do NOT rebase - this branch also has to merge into staging."
+        exit 1
+      fi
+
+      echo "  auto-merge enabled - merging ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} into ${SRC}..."
+      git config user.email "bot@bemade.org"
+      git config user.name "release-train"
+      git checkout -B "$SRC" HEAD
+      if ! git merge --no-edit "$TARGET"; then
+        git merge --abort || true
+        echo ""
+        echo "  CONFLICT: ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} does not merge cleanly into this branch."
+        echo "  This needs a person - most likely two branches moved the same addons.lock pin."
+        echo ""
+        echo "      git fetch origin && git merge origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+        echo ""
+        echo "  Do NOT rebase - this branch also has to merge into staging."
+        exit 1
+      fi
+      git push "https://oauth2:${CI_BOT_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git" "HEAD:${SRC}"
       echo ""
-      echo "          git fetch origin && git merge origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
-      echo ""
-      echo "      Do NOT rebase - this branch also has to merge into staging."
+      echo "  merged and pushed $(git rev-parse --short HEAD). A new pipeline is starting on it."
+      # This pipeline is testing the PRE-merge tree, so it must not be allowed to
+      # report success - the pipeline on the pushed commit is the one that
+      # decides. Terminating: that run finds the branch already up to date and
+      # pushes nothing.
+      #
+      # CANCEL rather than fail. Nothing here is broken, and a failed pipeline
+      # emails every subscriber on what is really just bookkeeping; a cancelled
+      # one is quiet and still is not `success`, so it cannot satisfy
+      # "pipelines must succeed" either. Projects with auto_cancel_pending_pipelines
+      # would get there on their own once the new pipeline registers (this job is
+      # interruptible), but that is a per-project setting, so ask explicitly.
+      curl -s -o /dev/null -w '  cancel pipeline %{http_code}\n' -X POST \
+        --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipelines/${CI_PIPELINE_ID}/cancel" || true
+      # Give the runner time to act on the cancellation before falling back.
+      i=0
+      while [ "$i" -lt 30 ]; do sleep 2; i=$((i+1)); done
+      echo "  still running 60s after requesting cancellation - failing instead,"
+      echo "  so the stale tree cannot report success."
       exit 1
 
 # After a merge lands on prod, start a fresh pipeline on every still-open MR

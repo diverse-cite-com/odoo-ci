@@ -225,6 +225,7 @@ Set these in your GitLab project settings (Settings > CI/CD > Variables):
 | `DEPLOY_TARGETS` | File | YAML mapping branches to k8s targets |
 | `MR_TARGET_BRANCHES` | Variable | Regex: MR target branches that trigger build+test |
 | `REVIEW_ENABLED` | Variable | Set to `"true"` to enable review environments for MRs |
+| `AUTO_MERGE_PROD_INTO_MR` | Variable | `"true"` to auto-merge the target into an out-of-date prod MR when clean (never rebases) |
 | `PROD_BRANCHES` | Variable | Regex: branches treated as production for the release-train gate (`mr_up_to_date` + `revalidate_prod_mrs`). Unset = no gate |
 
 ### Release-train gate (`PROD_BRANCHES`)
@@ -250,6 +251,20 @@ residual hole is registration latency: between a merge landing and the new
 pipelines registering, another already-green MR can still be merged. That
 requires two approvals landing seconds apart, and the failure mode is an
 untested *combination*, not untested code.
+
+**Optional: `AUTO_MERGE_PROD_INTO_MR = "true"`.** Since every merge to prod
+invalidates every open MR, the same mechanical `git merge origin/<prod>` gets
+run N times a day. With this set, `mr_up_to_date` does it for you when it is
+clean, pushes, and then **cancels** the current run so the pre-merge tree cannot report
+green — the pipeline on the pushed commit decides. Cancel rather than fail:
+nothing is broken, and a failed pipeline emails every subscriber, while a
+cancelled one is quiet and still is not `success`. It **never rebases**: a merge
+only appends, so there is no force-push and staging keeps seeing one identity per
+commit, whereas a rebase would hand staging a second identity for the same
+changes and re-conflict work already resolved there. Conflicts are left alone on
+purpose — a same-addon pin collision surfacing on the author's own branch is the
+early warning, not a chore to automate. Requires `CI_BOT_TOKEN` with
+`write_repository`; it refuses to push to forks or to protected branches.
 
 Also set `allow_merge_on_skipped_pipeline: false` on the project — "skipped
 counts as success" defeats the whole gate.
