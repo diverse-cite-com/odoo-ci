@@ -16,6 +16,9 @@ variables:
   CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-${CI_COMMIT_BRANCH}${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
 
 stages:
+  # Cheap correctness checks that must gate the expensive ones. Nothing here may
+  # depend on the build; anything that does belongs in `test`.
+  - precheck
   - build
   - test
   - deploy
@@ -1091,17 +1094,16 @@ vendor_update:
 # OPT-IN per project via PROD_BRANCHES (a regex matched against the MR's TARGET
 # branch). Unset = the job never exists, so non-train projects are unaffected.
 mr_up_to_date:
-  stage: test
+  # `precheck`, ahead of build, so an out-of-date MR is rejected before anything
+  # expensive runs. Stage ordering does the gating: every later job waits on this
+  # one, so a stale branch never builds an image at all. Putting it in `test`
+  # (or merely giving it `needs: []`) would still pay for the build. That cost is
+  # not incidental - revalidate_prod_mrs restarts every open MR's pipeline after
+  # each prod merge, and most of those pipelines exist only to report staleness.
+  stage: precheck
   tags: [kubernetes]
   image: alpine
   interruptible: true
-  # Opt out of stage ordering. This is git plumbing on an alpine image and needs
-  # nothing the build produces, so making it wait for `build` means a stale
-  # branch pays for a full image build before being told to run one merge
-  # command. That cost is not incidental: revalidate_prod_mrs restarts every
-  # open MR's pipeline after each prod merge, and most of those pipelines exist
-  # only to report staleness.
-  needs: []
   variables:
     GIT_DEPTH: 0  # merge-base needs real history, not a shallow clone
   rules:
