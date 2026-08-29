@@ -3,6 +3,10 @@
 #   TEST_BRANCHES     - which branches run tests (no fallback, unset = no tests)
 #   DEPLOY_BRANCHES   - which branches can deploy (no fallback, unset = no deploy)
 #   MR_TARGET_BRANCHES - target branches whose MRs trigger build+test (no fallback, unset = no MR pipelines)
+#   PROD_BRANCHES     - branches treated as production for the release-train gate:
+#                       MRs targeting them must contain the target's tip
+#                       (mr_up_to_date), and a merge onto them revalidates every
+#                       other open MR (revalidate_prod_mrs). Unset = no gate.
 #   REVIEW_ENABLED    - set to "true" to deploy ephemeral review instances for MRs
 #   ALLOWED_BRANCHES  - legacy, used as fallback for BUILD_BRANCHES
 # Format: re2 regex, see https://github.com/google/re2
@@ -1072,3 +1076,103 @@ vendor_update:
         --data-urlencode "description=Automated \`odoo-dev vendor update\` — re-pins vendored addons to their newest upstream. Review the addons.lock + vendored/ diff." \
         --data-urlencode "remove_source_branch=true"
       echo "opened vendor-bump MR: $BR -> ${CI_COMMIT_BRANCH}"
+
+# Guarantee that a green pipeline on a prod-targeted MR was produced against the
+# CURRENT tip of prod. Without it, two MRs can each be green against an older
+# prod and land a combination that no pipeline ever tested. GitLab CE has no
+# merge trains and no merged-results pipelines, so the gate is built here from
+# free parts; paired with `revalidate_prod_mrs` below (which re-runs open MRs
+# after a merge) it serializes prod merges by INVALIDATION rather than by queue.
+#
+# Never suggest rebasing here: under the release-train model a feature branch is
+# merged into BOTH staging and prod, so rebasing it onto either one binds it to
+# that destination's history and breaks the other merge.
+#
+# OPT-IN per project via PROD_BRANCHES (a regex matched against the MR's TARGET
+# branch). Unset = the job never exists, so non-train projects are unaffected.
+mr_up_to_date:
+  stage: test
+  tags: [kubernetes]
+  image: alpine
+  interruptible: true
+  variables:
+    GIT_DEPTH: 0  # merge-base needs real history, not a shallow clone
+  rules:
+    - if: $PROD_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $PROD_BRANCHES
+      when: always
+    - when: never
+  before_script:
+    - apk add --no-cache git
+  script:
+    # Explicit refspec: `git fetch origin <branch>` only updates the remote
+    # tracking ref opportunistically, and this check is worthless if it compares
+    # against a stale origin/<branch>.
+    - git fetch --quiet origin "+refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:refs/remotes/origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+    - |
+      TARGET="origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      if git merge-base --is-ancestor "$TARGET" HEAD; then
+        echo "OK: this branch contains the current tip of ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} ($(git rev-parse --short "$TARGET"))."
+        exit 0
+      fi
+      echo "FAIL: this branch does NOT contain the current tip of ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}."
+      echo "      ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME} is at $(git rev-parse --short "$TARGET"); this branch is at $(git rev-parse --short HEAD)."
+      echo ""
+      echo "      A green pipeline here would not describe what actually lands."
+      echo "      Bring the target in and push:"
+      echo ""
+      echo "          git fetch origin && git merge origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      echo ""
+      echo "      Do NOT rebase - this branch also has to merge into staging."
+      exit 1
+
+# After a merge lands on prod, start a fresh pipeline on every still-open MR
+# targeting it. Each of those MRs is now stale by construction, so its new
+# pipeline fails `mr_up_to_date` and its old green stops being mergeable.
+#
+# This closes the "two greens, both against the previous prod" hole down to
+# registration latency: the window is only between the merge landing and this
+# job registering the new pipelines. Runs first thing, with no `needs`, so that
+# window stays as small as possible.
+#
+# Requires CI_BOT_TOKEN (api scope). Never fails the prod pipeline - a missed
+# revalidation is a degraded gate, not a reason to redden a merge that already
+# landed.
+revalidate_prod_mrs:
+  stage: build
+  tags: [kubernetes]
+  image: alpine
+  needs: []
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $PROD_BRANCHES && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $PROD_BRANCHES
+      when: always
+    - when: never
+  before_script:
+    - apk add --no-cache curl jq
+  script:
+    - |
+      if [ -z "${CI_BOT_TOKEN:-}" ]; then
+        echo "CI_BOT_TOKEN not set - cannot start MR pipelines. Open MRs targeting"
+        echo "${CI_COMMIT_BRANCH} keep their stale green until they are pushed to."
+        exit 1
+      fi
+      page=1
+      total=0
+      while :; do
+        resp=$(curl --fail --silent --show-error \
+          --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests?state=opened&target_branch=${CI_COMMIT_BRANCH}&per_page=100&page=${page}")
+        iids=$(echo "$resp" | jq -r '.[].iid')
+        [ -z "$iids" ] && break
+        for iid in $iids; do
+          code=$(curl --silent --show-error -X POST -o /dev/null -w '%{http_code}' \
+            --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+            "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${iid}/pipelines")
+          echo "  !${iid}: HTTP ${code}"
+          total=$((total+1))
+        done
+        page=$((page+1))
+      done
+      echo "revalidated ${total} open MR(s) targeting ${CI_COMMIT_BRANCH}."
