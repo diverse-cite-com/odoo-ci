@@ -1211,11 +1211,23 @@ mr_up_to_date:
       curl -s -o /dev/null -w '  cancel pipeline %{http_code}\n' -X POST \
         --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/pipelines/${CI_PIPELINE_ID}/cancel" || true
-      # Give the runner time to act on the cancellation before falling back.
+      # Wait to be killed. GitLab accepts the cancel immediately, but the runner
+      # only acts on it at its next poll - measured at ~49s once, and that is one
+      # sample on an idle instance, not a characterised distribution. So this is a
+      # deadline, not a sleep: the job normally ends when the runner kills it, and
+      # the ceiling only matters if the cancellation never arrives at all.
+      #
+      # Sized generously on purpose. Falling through means a red pipeline and a
+      # mail to every subscriber, which is exactly what cancelling was meant to
+      # avoid - so the only thing a tight window can buy is the failure mode we
+      # were trying to remove. At three minutes, falling through is no longer a
+      # timing accident: it means GitLab did not act on a cancellation it accepted,
+      # which is worth being told about.
       i=0
-      while [ "$i" -lt 30 ]; do sleep 2; i=$((i+1)); done
-      echo "  still running 60s after requesting cancellation - failing instead,"
-      echo "  so the stale tree cannot report success."
+      while [ "$i" -lt 90 ]; do sleep 2; i=$((i+1)); done
+      echo "  still running 180s after GitLab accepted the cancellation."
+      echo "  That is a GitLab problem, not a merge problem - failing to raise it,"
+      echo "  and so the stale tree cannot report success."
       exit 1
 
 # After a merge lands on prod, start a fresh pipeline on every still-open MR
