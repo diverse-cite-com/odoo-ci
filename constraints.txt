@@ -1,0 +1,13 @@
+# Bornes transverses appliquees a TOUS les projets construits par ce CI.
+#
+# Les requirements.txt des projets declarent CE dont ils ont besoin ; ce
+# fichier dit COMMENT les versions doivent s accorder entre elles. On y met
+# des BORNES, jamais des versions exactes : un pin fige dans un fichier
+# partage casse tous les projets le jour ou il vieillit.
+
+# paramiko, pywebpush, boto3... tirent cryptography sans borne. Depuis la
+# version 42, ses bindings n exposent plus GEN_EMAIL & co ; un pyOpenSSL
+# anterieur a 24.1 les utilise encore et fait echouer l import de
+# odoo.addons.base (ir_mail_server -> import OpenSSL), donc le demarrage
+# complet du serveur. Constate le 2026-08-31 sur diverse-odoo.
+pyOpenSSL>=24.1

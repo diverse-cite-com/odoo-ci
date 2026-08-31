@@ -19,6 +19,19 @@ variables:
   # CI_COMMIT_BRANCH is set for push pipelines; CI_MERGE_REQUEST_SOURCE_BRANCH_NAME for MR pipelines
   CONTAINER_IMAGE: "${CI_REGISTRY_IMAGE}/odoo-${CI_COMMIT_BRANCH}${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
 
+# Les echecs d infrastructure ne sont pas des echecs de code : pod coince en
+# Pending, connexion SSH reinitialisee, runner evince. Sans reprise, chacun
+# transforme un pipeline sain en pipeline rouge que quelqu un relance a la
+# main. On ne reprend deliberement PAS sur script_failure : relancer un vrai
+# echec de test masquerait les tests instables.
+default:
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - scheduler_failure
+
 stages:
   # Cheap correctness checks that must gate the expensive ones. Nothing here may
   # depend on the build; anything that does belongs in `test`.
@@ -1268,3 +1281,38 @@ revalidate_prod_mrs:
         page=$((page+1))
       done
       echo "revalidated ${total} open MR(s) targeting ${CI_COMMIT_BRANCH}."
+
+# ---------------------------------------------------------------------------
+# Verrouillage des dependances — OPT-IN.
+#
+# Ne s execute que dans les projets ayant adopte un requirements.lock : les
+# autres ne voient rien changer. Le job echoue si le lock ne correspond plus
+# a requirements.txt, ce qui rend impossible de modifier les dependances sans
+# regenerer la resolution — et rend donc le lock digne de confiance.
+#
+# Sans cela, une dependance transitive non bornee change de version toute
+# seule entre deux builds du meme commit. C est ainsi qu une cryptography
+# recente a casse l import de base le 2026-08-31.
+lock_check:
+  stage: test
+  tags: [kubernetes]
+  image: ${CONTAINER_IMAGE}:test
+  interruptible: true
+  needs: ["build"]
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      exists:
+        - requirements.lock
+      when: on_success
+    - when: never
+  script:
+    - |
+      set -e
+      uv pip compile requirements.txt -o /tmp/lock.new --quiet
+      if ! diff -u requirements.lock /tmp/lock.new; then
+        echo
+        echo "Le lock ne correspond plus a requirements.txt."
+        echo "Regenerer avec :  uv pip compile requirements.txt -o requirements.lock"
+        exit 1
+      fi
+      echo "requirements.lock a jour."
