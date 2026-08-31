@@ -936,27 +936,14 @@ cleanup:
 
 
 # ---------------------------------------------------------------------------
-# Release train (step 6 of the RC flow): on a daily SCHEDULE, MERGE the standing
-# rc-<branch> -> <branch> MR (the "release PR" the task-worker accumulates) via
-# the GitLab API. Release branches are PROTECTED — this merges, never pushes.
-# Opt-in per project: set RELEASE_BRANCHES (e.g. "18.0 19.0") + RELEASE_TRAIN_TOKEN
-# (a token allowed to merge into the protected release branches) + a daily
-# scheduled pipeline. Unset RELEASE_BRANCHES = never runs.
+# The nightly `release_train` job lived here until Odoo #4187. It merged a
+# standing rc-<ver> -> <ver> MR on a schedule, which was the last step of the
+# cherry-pick promotion model. That model is retired: promotion is now
+# deterministic Python on the Odoo side (`bemade_work_release`), which selects
+# approved tasks, verifies each one, merges its single production MR and
+# publishes the dated release itself. CI no longer writes to a production
+# branch on a timer; `RELEASE_BRANCHES` went with it.
 # ---------------------------------------------------------------------------
-release_train:
-  stage: deploy
-  tags: [kubernetes]
-  image: alpine
-  rules:
-    - if: $RELEASE_BRANCHES && $CI_PIPELINE_SOURCE == "schedule"
-      when: always
-    - when: never
-  before_script:
-    - apk add --no-cache git openssh-client bash curl jq
-    - *setup_ssh
-    - git clone -b ${ODOO_CI_REF:-main} git@git.bemade.org:bemade/odoo-ci.git /tmp/odoo-ci
-  script:
-    - bash /tmp/odoo-ci/scripts/release_train.sh
 
 # Enforce the module-versioning convention: any module changed in an MR must
 # bump its __manifest__.py version vs the target branch. Opt-in per project via
@@ -1026,7 +1013,7 @@ vendor_check:
 # Pull-side propagation for per-addon vendoring (task #3992): on a SCHEDULE, pull
 # the newest upstream pins (`odoo-dev vendor update`) and, if anything moved, open a
 # vendor-bump MR. The client owns its pins — there is NO push/fan-out from the source
-# repos. OPT-IN (like release_train): create a pipeline schedule on the mainline
+# repos. OPT-IN: create a pipeline schedule on the mainline
 # branch with variable VENDOR_UPDATE_SCHEDULE=1, and set CI_BOT_TOKEN
 # (write_repository + api). It never runs on other schedules.
 vendor_update:
