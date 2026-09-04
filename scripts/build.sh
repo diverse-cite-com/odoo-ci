@@ -85,6 +85,28 @@ if [ -f ".odoo-deploy/odoo-ci/prepare-build.sh" ]; then
   bash .odoo-deploy/odoo-ci/prepare-build.sh
 fi
 
+# Materialiser les contraintes transverses dans le contexte de build.
+#
+# Le Dockerfile vient d'odoo-ci (${ODOO_CI_DIR}/Dockerfile) mais le CONTEXTE
+# est le repertoire du projet : un `COPY constraints.txt` y chercherait un
+# fichier absent, et le build echouerait avant meme d'installer quoi que ce
+# soit. On depose donc le fichier dans le contexte.
+#
+# Ecrase deliberement une eventuelle version locale : les bornes transverses
+# sont la politique du CI, pas une option que chaque depot redefinit.
+cp "${ODOO_CI_DIR}/constraints.txt" ./constraints.txt
+
+# Materialiser les contraintes transverses dans le contexte de build.
+#
+# Le Dockerfile vient d'odoo-ci (${ODOO_CI_DIR}/Dockerfile) mais le CONTEXTE
+# est le repertoire du projet : un `COPY constraints.txt` y chercherait un
+# fichier absent, et le build echouerait avant meme d'installer quoi que ce
+# soit. On depose donc le fichier dans le contexte.
+#
+# Ecrase deliberement une eventuelle version locale : les bornes transverses
+# sont la politique du CI, pas une option que chaque depot redefinit.
+cp "${ODOO_CI_DIR}/constraints.txt" ./constraints.txt
+
 # Materialize symlinks in ./addons into real directories.
 #
 # The Dockerfile downstream does `COPY ./addons /mnt/extra-addons`, which
