@@ -26,7 +26,7 @@ controllerServiceAccount:
 
 # Scale to zero between PRs; Odoo test jobs are long but infrequent.
 minRunners: 0
-maxRunners: 2
+maxRunners: 4
 
 containerMode:
   # dind, not kubernetes mode, for two reasons:
