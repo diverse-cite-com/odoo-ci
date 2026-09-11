@@ -938,10 +938,23 @@ cleanup:
       REPO_ID=$(curl -s --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
         "${API_URL}" | jq -r ".[] | select(.path == \"${REPO_PATH}\") | .id")
 
+      # Delete the TAGS, never the repository. Deleting the repository
+      # (DELETE .../repositories/:id) is asynchronous in GitLab: the
+      # repository sits in a scheduled-deletion state for an unbounded time,
+      # during which pushes to the same path are accepted but no tag can be
+      # resolved. The next pipeline on the same branch then builds an image
+      # nobody can pull -- `buildx imagetools inspect` reports "not found"
+      # seconds after a successful push, and the test job dies with
+      # ErrImagePull. Seen on every second pipeline of a branch. Tag deletion
+      # is synchronous and leaves the path usable.
       if [ -n "$REPO_ID" ] && [ "$REPO_ID" != "null" ]; then
-        echo "Deleting registry repository ${REPO_PATH} (ID: ${REPO_ID})..."
-        curl -s --request DELETE --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
-          "${API_URL}/${REPO_ID}"
+        TAGS=$(curl -s --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+          "${API_URL}/${REPO_ID}/tags?per_page=100" | jq -r '.[].name')
+        for TAG in $TAGS; do
+          echo "Deleting tag ${REPO_PATH}:${TAG}..."
+          curl -s --fail --request DELETE --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+            "${API_URL}/${REPO_ID}/tags/${TAG}" || echo "  (could not delete ${TAG})"
+        done
         echo "Cleanup complete."
       else
         echo "Registry repository not found for ${REPO_PATH} - nothing to clean up."
