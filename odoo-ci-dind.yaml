@@ -1034,7 +1034,16 @@ vendor_check:
         echo "No addons.lock at repo root — not vendored; skipping vendor check."
         exit 0
       fi
-    - odoo-dev vendor check
+    # VENDOR_CHECK_NO_HYBRID=true (a project CI/CD variable) also fails the job
+    # when addons/ still symlinks into .repos/, i.e. a half-finished
+    # `odoo-dev vendor migrate`. Opt-in per project: a hybrid project would
+    # otherwise go red on every pipeline.
+    - |
+      if [ "${VENDOR_CHECK_NO_HYBRID:-false}" = "true" ]; then
+        odoo-dev vendor check --no-hybrid
+      else
+        odoo-dev vendor check
+      fi
 
 # Pull-side propagation for per-addon vendoring (task #3992): on a SCHEDULE, pull
 # the newest upstream pins (`odoo-dev vendor update`) and, if anything moved, open a
