@@ -24,6 +24,7 @@ Then configure via **GitLab Project Variables** (Settings > CI/CD > Variables):
 | `TEST_BRANCHES` | `19.0\|19.0-staging` | Regex: which branches run tests |
 | `DEPLOY_BRANCHES` | `19.0` | Regex: which branches can deploy |
 | `DEPLOY_TARGETS` | *(file variable)* | YAML mapping branches to k8s targets |
+| `VENDOR_CHECK_NO_HYBRID` | `true` | `vendor_check` also fails while `addons/` still symlinks into `.repos/` (a half-finished `odoo-dev vendor migrate`). Default off. |
 
 ### Legacy Setup (Backwards Compatible)
 
