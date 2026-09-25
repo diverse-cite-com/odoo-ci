@@ -267,6 +267,15 @@ purpose — a same-addon pin collision surfacing on the author's own branch is t
 early warning, not a chore to automate. Requires `CI_BOT_TOKEN` with
 `write_repository`; it refuses to push to forks or to protected branches.
 
+Drafts are the exception. When `revalidate_prod_mrs` re-runs a **draft** MR
+(the pipeline's user is the `CI_BOT_TOKEN` user), `mr_up_to_date` does not merge
+prod in: it fails the precheck, which is enough to mark the MR stale. Merging
+would push, and every push is a full build + test of a branch nobody is about to
+merge. A train with many drafts waiting for client approval would pay one full
+CI run per draft on every prod merge. Pushing to the branch, or clicking **Run
+pipeline** on the MR, starts a pipeline under a person's name, and that one merges
+prod in as usual. Do that when the draft is marked ready.
+
 Also set `allow_merge_on_skipped_pipeline: false` on the project — "skipped
 counts as success" defeats the whole gate.
 
