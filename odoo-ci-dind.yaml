@@ -82,9 +82,14 @@ build:
   # rather than letting them run to completion and act on the cluster later.
   interruptible: true
   rules:
-    # MR pipelines
+    # MR pipelines. on_success, NOT always: `always` runs even when an earlier
+    # stage failed, which let an MR rejected by the `precheck` stage
+    # (mr_up_to_date) build its image anyway, and everything that needs the
+    # build (test, upgrade-modules-preview, lock_check, review-deploy)
+    # followed. With revalidate_prod_mrs re-running every open MR after each
+    # prod merge, that was a full build + test per stale MR per prod merge.
     - if: $MR_TARGET_BRANCHES && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
-      when: always
+      when: on_success
     # Use BUILD_BRANCHES if set, otherwise fall back to ALLOWED_BRANCHES
     - if: $BUILD_BRANCHES && $CI_COMMIT_BRANCH && $CI_PIPELINE_SOURCE != "merge_request_event" && $CI_COMMIT_BRANCH =~ $BUILD_BRANCHES
       when: always
@@ -983,9 +988,16 @@ version_bump_check:
   image: python:3.12-slim
   variables:
     GIT_DEPTH: 0  # full history so the merge-base for the diff is available
+  # Gated on the precheck only: skipped with a stale MR, but independent of the
+  # build, so a failed build still reports version-bump problems (and it runs
+  # alongside the build instead of after it). Optional: mr_up_to_date only
+  # exists on MRs targeting PROD_BRANCHES.
+  needs:
+    - job: mr_up_to_date
+      optional: true
   rules:
     - if: $VERSION_BUMP_CHECK == "true" && $CI_PIPELINE_SOURCE == "merge_request_event" && $MR_TARGET_BRANCHES && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ $MR_TARGET_BRANCHES
-      when: always
+      when: on_success
     - when: never
   before_script:
     - apt-get update -qq && apt-get install -y -qq git >/dev/null
