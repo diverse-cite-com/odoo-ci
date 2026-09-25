@@ -11,6 +11,8 @@
 #                       branch into an out-of-date MR automatically when it is
 #                       clean, and push. Never rebases. Requires CI_BOT_TOKEN
 #                       with write_repository. Conflicts are left to a human.
+#                       Draft MRs re-run by the bot after a prod merge are
+#                       only marked stale (failed precheck), not merged into.
 #   REVIEW_ENABLED    - set to "true" to deploy ephemeral review instances for MRs
 #   ALLOWED_BRANCHES  - legacy, used as fallback for BUILD_BRANCHES
 # Format: re2 regex, see https://github.com/google/re2
@@ -1191,6 +1193,31 @@ mr_up_to_date:
         code=$(curl -s -o /dev/null -w '%{http_code}' --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
                  "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/protected_branches/${SRC}")
         [ "$code" = "404" ] || skip="source branch ${SRC} is protected (HTTP ${code})"
+      fi
+      # An idle draft that the bot re-ran after a prod merge (revalidate_prod_mrs)
+      # is only here to lose its stale green. Merging prod into it would push,
+      # and every push is a full build + test of a branch nobody is about to
+      # merge: on a train with many drafts waiting for client approval, that is
+      # one full CI run per draft per prod merge. Fail cheaply instead - the red
+      # precheck is the staleness signal, and the pipeline belongs to the bot, so
+      # its failure notice goes to the bot rather than to the MR's author. A
+      # person pushing, or clicking "Run pipeline", starts a pipeline under their
+      # own name and gets the automatic merge as before. If either lookup fails,
+      # fall through to the automatic merge: that is the pre-existing behaviour.
+      if [ -z "$skip" ]; then
+        bot_login=$(curl -s --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+                      "${CI_API_V4_URL}/user" | jq -r '.username // empty')
+        if [ -n "$bot_login" ] && [ "${GITLAB_USER_LOGIN:-}" = "$bot_login" ]; then
+          draft=$(curl -s --header "PRIVATE-TOKEN: ${CI_BOT_TOKEN}" \
+                    "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}" \
+                    | jq -r '.draft // empty')
+          if [ "$draft" = "true" ]; then
+            echo "  Draft MR re-run by ${bot_login} after a merge to ${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:"
+            echo "  not merging it in automatically while it is a draft."
+            echo "  Push to ${SRC}, or click \"Run pipeline\" on the MR, and it is merged in then."
+            exit 1
+          fi
+        fi
       fi
       if [ -n "$skip" ]; then
         echo "  auto-merge skipped: ${skip}"
